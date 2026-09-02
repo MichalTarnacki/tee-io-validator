@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "name": "TDISP ECP384 v10",
+  "source": "issue #53 v10 classical baseline",
+  "assertion_counts_complete": false,
+  "notes": "Null assertion counts were not retained in the issue text and must be filled from the archived v10 log with teeio_regression.py --update.",
+  "cases": {
+    "Version.1": {"status": "pass", "passed": null, "failed": null},
+    "Capabilities.1": {"status": "fail", "passed": 9, "failed": 1},
+    "LockInterface.1": {"status": "pass", "passed": null, "failed": null},
+    "LockInterface.2": {"status": "fail", "passed": 0, "failed": 1},
+    "LockInterface.3": {"status": "pass", "passed": null, "failed": null},
+    "LockInterface.4": {"status": "pass", "passed": null, "failed": null},
+    "DeviceReport.1": {"status": "pass", "passed": null, "failed": null},
+    "DeviceReport.2": {"status": "pass", "passed": null, "failed": null},
+    "DeviceReport.3": {"status": "pass", "passed": null, "failed": null},
+    "DeviceReport.4": {"status": "pass", "passed": null, "failed": null},
+    "DeviceReport.5": {"status": "pass", "passed": null, "failed": null},
+    "DeviceState.1": {"status": "pass", "passed": null, "failed": null},
+    "DeviceState.2": {"status": "pass", "passed": null, "failed": null},
+    "DeviceState.3": {"status": "pass", "passed": null, "failed": null},
+    "DeviceState.4": {"status": "pass", "passed": null, "failed": null},
+    "StartInterface.1": {"status": "pass", "passed": null, "failed": null},
+    "StartInterface.2": {"status": "pass", "passed": null, "failed": null},
+    "StartInterface.3": {"status": "pass", "passed": null, "failed": null},
+    "StartInterface.4": {"status": "pass", "passed": null, "failed": null},
+    "StopInterface.1": {"status": "pass", "passed": null, "failed": null},
+    "StopInterface.2": {"status": "pass", "passed": null, "failed": null},
+    "StopInterface.3": {"status": "pass", "passed": 6, "failed": 0}
+  }
+}

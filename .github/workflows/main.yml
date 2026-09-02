@@ -34,4 +34,37 @@ jobs:
               cd teeio-validator/build/
               cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=${{matrix.build_version}} -DCRYPTO=mbedtls ..
               make -j
+
+      - name: Run host tests
+        run: |
+              teeio-validator/scripts/run_fault_injection_ut.sh
+              teeio-validator/scripts/run_fault_catalog_test.sh teeio-validator/build/bin/teeio_validator
+              teeio-validator/scripts/run_regression_selftest.sh
+
+  build-pqc:
+    name: Build SPDM 1.4 PQC requester
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Sources
+        uses: actions/checkout@v4
+
+      - name: Initialize and update submodules
+        run: git submodule update --init --recursive
+
+      - name: Configure OpenSSL PQC profile
+        run: |
+              cmake -S teeio-validator -B teeio-validator/build-pqc \
+                -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Debug \
+                -DCRYPTO=openssl -DX509_IGNORE_CRITICAL=ON
+
+      - name: Build
+        run: cmake --build teeio-validator/build-pqc --parallel
+
+      - name: Run host tests
+        run: |
+              teeio-validator/scripts/run_fault_injection_ut.sh
+              teeio-validator/scripts/run_fault_catalog_test.sh teeio-validator/build-pqc/bin/teeio_validator
+              teeio-validator/scripts/run_regression_selftest.sh
   

@@ -122,6 +122,7 @@ void *spdm_client_init(void)
     size_t scratch_buffer_size;
 
     TEEIO_DEBUG((TEEIO_DEBUG_INFO, "spdm_client_init\n"));
+    teeio_fault_transport_reset();
 
     m_spdm_context = (void *)malloc(libspdm_get_context_size());
     if (m_spdm_context == NULL) {
@@ -137,8 +138,8 @@ void *spdm_client_init(void)
             LIBSPDM_MAX_SPDM_MSG_SIZE,
             LIBSPDM_TRANSPORT_HEADER_SIZE,
             LIBSPDM_TRANSPORT_TAIL_SIZE,
-            libspdm_transport_pci_doe_encode_message,
-            libspdm_transport_pci_doe_decode_message);
+            teeio_fault_transport_encode_message,
+            teeio_fault_transport_decode_message);
     libspdm_register_device_buffer_func(spdm_context,
                                         LIBSPDM_SENDER_BUFFER_SIZE,
                                         LIBSPDM_RECEIVER_BUFFER_SIZE,

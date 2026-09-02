@@ -2,13 +2,15 @@
 
 **TEE-IO Device Validation Utility** reads ide_test.ini to get the information, such as root port dev/func, endpoint dev/func, topology, etc. Its structure refers to [IdeKmTestCase](../doc/ide_test/IdeKmTestCase), [IdeKmTestConfiguration](../doc/ide_test/IdeKmTestConfiguration) and [IdeKmTestTopology](../doc/ide_test/IdeKmTestTopology)
 
-There are 6 sections in the ide_test.ini.
+There are 8 section types in the ide_test.ini.
 1. Main
 2. Ports
 3. Switch_x (x is in [1,16])
 4. Topology_x (x is in [1,16])
 5. Configuration_x (x is in [1,32])
 6. TestSuite_x (x is in [1,32])
+7. FaultInjection
+8. FaultRule_x (x is in [1,64])
 
 ## Format
 ```
@@ -38,6 +40,10 @@ EntryName=EntryValue
 | pcap_enable | 0/1 | 0 | O | enable pcap capture if 1|
 | doe_log|0/1 |0 | O | enable doe log if 1|
 | spdm_version | auto/1.0/1.1/1.2/1.3/1.4 | auto | O | select the SPDM version advertised by the requester|
+
+`[FaultInjection]` and `[FaultRule_x]` are documented in
+[SPDM fault injection](spdm_fault_injection.md). Fault injection is disabled by
+default.
 
 [Ports]
 |Entry|Value|Default|Mandatory|Comment|

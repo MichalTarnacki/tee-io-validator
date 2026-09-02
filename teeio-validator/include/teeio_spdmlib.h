@@ -30,6 +30,21 @@ bool is_doe_error_asserted();
 void *spdm_client_init(void);
 
 /**
+ * configure the requested SPDM version
+ */
+void teeio_spdm_set_version(uint8_t spdm_version);
+
+/**
+ * apply the configured SPDM version to a client context
+ */
+bool teeio_spdm_apply_version_override(void *spdm_context);
+
+/**
+ * log the requested and negotiated SPDM versions
+ */
+void teeio_spdm_log_negotiated_version(void *spdm_context);
+
+/**
  * setup spdm connection
 */
 bool spdm_connect (void *spdm_context, uint32_t *session_id);
@@ -97,7 +112,7 @@ void spdm_device_release_receiver_buffer (
  * If chunk is supported, it must be larger than DATA_TRANSFER_SIZE.
  * It matches MaxSPDMmsgSize in SPDM specification. */
 #ifndef LIBSPDM_MAX_SPDM_MSG_SIZE
-#define LIBSPDM_MAX_SPDM_MSG_SIZE 0x1200
+#define LIBSPDM_MAX_SPDM_MSG_SIZE 0x1900
 #endif
 
 #endif

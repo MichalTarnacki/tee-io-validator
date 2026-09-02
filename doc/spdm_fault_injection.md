@@ -114,3 +114,23 @@ alignment, replay ownership, audit output, and state reset. The second command
 selects and parses all 34 catalog scenarios; it does not claim a protocol test
 result. Actual expected-versus-actual outcomes require the target device and the
 matching prerequisite flow.
+
+## Reproducible campaign
+
+The campaign runner materializes one configuration per scenario and archives
+commands, stdout/stderr logs, result JSON, executable and catalog checksums,
+source commit, and recursive submodule pins:
+
+```bash
+python3 teeio-validator/tools/teeio_fault_campaign.py \
+    --binary teeio-validator/build-pqc/bin/teeio_validator \
+    --catalog doc/sample_ini/spdm_negative_cases.ini \
+    --positive-ini doc/sample_ini/spdm_test.ini \
+    --output evidence/spdm-pqc-$(date -u +%Y%m%dT%H%M%SZ) \
+    --scenario all
+```
+
+Pass target-specific validator arguments after `--`. A campaign passes only
+when every selected scenario fires and records an actual outcome. `--dry-run`
+validates selection and creates the manifest/configuration set without
+accessing hardware.

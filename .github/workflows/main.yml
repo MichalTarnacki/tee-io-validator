@@ -40,6 +40,7 @@ jobs:
               teeio-validator/scripts/run_fault_injection_ut.sh
               teeio-validator/scripts/run_fault_catalog_test.sh teeio-validator/build/bin/teeio_validator
               teeio-validator/scripts/run_regression_selftest.sh
+              teeio-validator/scripts/run_campaign_selftest.sh teeio-validator/build/bin/teeio_validator
 
   build-pqc:
     name: Build SPDM 1.4 PQC requester
@@ -67,4 +68,5 @@ jobs:
               teeio-validator/scripts/run_fault_injection_ut.sh
               teeio-validator/scripts/run_fault_catalog_test.sh teeio-validator/build-pqc/bin/teeio_validator
               teeio-validator/scripts/run_regression_selftest.sh
+              teeio-validator/scripts/run_campaign_selftest.sh teeio-validator/build-pqc/bin/teeio_validator
   

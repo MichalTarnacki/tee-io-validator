@@ -37,6 +37,7 @@ EntryName=EntryValue
 | debug_level | verbose/info/warn/error | warn | O | debug level|
 | pcap_enable | 0/1 | 0 | O | enable pcap capture if 1|
 | doe_log|0/1 |0 | O | enable doe log if 1|
+| spdm_version | auto/1.0/1.1/1.2/1.3/1.4 | auto | O | select the SPDM version advertised by the requester|
 
 [Ports]
 |Entry|Value|Default|Mandatory|Comment|

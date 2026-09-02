@@ -2215,7 +2215,28 @@ bool ParseTopologySection(void *context, IDE_TEST_CONFIG *test_config, int index
   return true;
 }
 
-void ParseMainSection(void *context, IDE_TEST_CONFIG *test_config)
+static bool parse_spdm_version(const char *value, uint8_t *spdm_version)
+{
+  if (strcmp(value, "auto") == 0) {
+    *spdm_version = TEEIO_SPDM_VERSION_AUTO;
+  } else if (strcmp(value, "1.0") == 0) {
+    *spdm_version = 0x10;
+  } else if (strcmp(value, "1.1") == 0) {
+    *spdm_version = 0x11;
+  } else if (strcmp(value, "1.2") == 0) {
+    *spdm_version = 0x12;
+  } else if (strcmp(value, "1.3") == 0) {
+    *spdm_version = 0x13;
+  } else if (strcmp(value, "1.4") == 0) {
+    *spdm_version = 0x14;
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+bool ParseMainSection(void *context, IDE_TEST_CONFIG *test_config)
 {
   char section_name[MAX_SECTION_NAME_LENGTH] = {0};
   char entry_name[MAX_ENTRY_NAME_LENGTH] = {0};
@@ -2256,6 +2277,20 @@ void ParseMainSection(void *context, IDE_TEST_CONFIG *test_config)
   {
     test_config->main_config.pcap_enable = data32 == 1;
   }
+
+  test_config->main_config.spdm_version = TEEIO_SPDM_VERSION_AUTO;
+  sprintf(entry_name, "%s", MAIN_SECTION_SPDM_VERSION);
+  if (GetStringFromDataFile(context, (uint8_t *)section_name, (uint8_t *)entry_name, &entry_value))
+  {
+    if (!parse_spdm_version((const char *)entry_value, &test_config->main_config.spdm_version))
+    {
+      TEEIO_DEBUG((TEEIO_DEBUG_ERROR, "[%s] %s shall be auto or a version from 1.0 to 1.4. %s\n",
+                   section_name, entry_name, entry_value));
+      return false;
+    }
+  }
+
+  return true;
 }
 
 void ParsePortsSection(void *context, IDE_TEST_CONFIG *test_config, IDE_PORT_TYPE port_type)
@@ -2369,6 +2404,12 @@ void dump_test_config(IDE_TEST_CONFIG *test_config)
   TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  libspdm_log=%s\n", main_config->libspdm_log == 0 ? "false":"true"));
   TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  doe_log=%s\n", main_config->doe_log == 0 ? "false":"true"));
   TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  pcap_enable=%s\n", main_config->pcap_enable == 0 ? "false":"true"));
+  if (main_config->spdm_version == TEEIO_SPDM_VERSION_AUTO) {
+    TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  spdm_version=auto\n"));
+  } else {
+    TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  spdm_version=%u.%u\n",
+                 main_config->spdm_version >> 4, main_config->spdm_version & 0x0f));
+  }
   TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "\n"));
 
   IDE_TEST_PORTS_CONFIG *ports = &test_config->ports_config;
@@ -2575,7 +2616,10 @@ bool parse_ide_test_init(IDE_TEST_CONFIG *test_config, const char *ide_test_ini)
   }
 
   // [Main]
-  ParseMainSection(context, test_config);
+  if (!ParseMainSection(context, test_config))
+  {
+    goto ParseDone;
+  }
 
   // [Ports]
   // rootport_x and endpoint_x

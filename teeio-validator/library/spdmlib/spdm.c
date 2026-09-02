@@ -9,6 +9,7 @@
 
 void *m_spdm_context;
 void *m_scratch_buffer;
+static uint8_t m_requested_spdm_version;
 
 bool libspdm_write_output_file(const char *file_name, const void *file_data,
                                size_t file_size);
@@ -43,6 +44,72 @@ void spdm_device_release_receiver_buffer (
     void *context, const void *msg_buf_ptr);
 
 libspdm_return_t pci_doe_process_session_test(void *spdm_context, uint32_t session_id);
+
+void teeio_spdm_set_version(uint8_t spdm_version)
+{
+    m_requested_spdm_version = spdm_version;
+}
+
+bool teeio_spdm_apply_version_override(void *spdm_context)
+{
+    libspdm_data_parameter_t parameter;
+    libspdm_return_t status;
+    spdm_version_number_t spdm_version;
+
+    if (m_requested_spdm_version == 0) {
+        TEEIO_DEBUG((TEEIO_DEBUG_INFO, "Requested SPDM version: auto\n"));
+        return true;
+    }
+
+    if (m_requested_spdm_version < SPDM_MESSAGE_VERSION_10 ||
+        m_requested_spdm_version > SPDM_MESSAGE_VERSION_14) {
+        TEEIO_DEBUG((TEEIO_DEBUG_ERROR, "Unsupported requested SPDM version: 0x%02x\n",
+                     m_requested_spdm_version));
+        return false;
+    }
+
+    libspdm_zero_mem(&parameter, sizeof(parameter));
+    parameter.location = LIBSPDM_DATA_LOCATION_LOCAL;
+    spdm_version = (spdm_version_number_t)m_requested_spdm_version <<
+                   SPDM_VERSION_NUMBER_SHIFT_BIT;
+    status = libspdm_set_data(spdm_context, LIBSPDM_DATA_SPDM_VERSION,
+                              &parameter, &spdm_version, sizeof(spdm_version));
+    if (LIBSPDM_STATUS_IS_ERROR(status)) {
+        TEEIO_DEBUG((TEEIO_DEBUG_ERROR, "Failed to request SPDM version 0x%02x: 0x%x\n",
+                     m_requested_spdm_version, (uint32_t)status));
+        return false;
+    }
+
+    TEEIO_DEBUG((TEEIO_DEBUG_INFO, "Requested SPDM version: %u.%u (0x%02x)\n",
+                 m_requested_spdm_version >> 4, m_requested_spdm_version & 0x0f,
+                 m_requested_spdm_version));
+    return true;
+}
+
+void teeio_spdm_log_negotiated_version(void *spdm_context)
+{
+    libspdm_data_parameter_t parameter;
+    libspdm_return_t status;
+    spdm_version_number_t spdm_version;
+    size_t data_size;
+    uint8_t negotiated_version;
+
+    libspdm_zero_mem(&parameter, sizeof(parameter));
+    parameter.location = LIBSPDM_DATA_LOCATION_CONNECTION;
+    data_size = sizeof(spdm_version);
+    status = libspdm_get_data(spdm_context, LIBSPDM_DATA_SPDM_VERSION,
+                              &parameter, &spdm_version, &data_size);
+    if (LIBSPDM_STATUS_IS_ERROR(status) || data_size != sizeof(spdm_version)) {
+        TEEIO_DEBUG((TEEIO_DEBUG_ERROR, "Failed to read negotiated SPDM version: 0x%x\n",
+                     (uint32_t)status));
+        return;
+    }
+
+    negotiated_version = (uint8_t)(spdm_version >> SPDM_VERSION_NUMBER_SHIFT_BIT);
+    TEEIO_DEBUG((TEEIO_DEBUG_INFO, "Negotiated SPDM version: %u.%u (0x%02x)\n",
+                 negotiated_version >> 4, negotiated_version & 0x0f,
+                 negotiated_version));
+}
 
 void *spdm_client_init(void)
 {
@@ -88,6 +155,13 @@ void *spdm_client_init(void)
     }
     libspdm_set_scratch_buffer (spdm_context, m_scratch_buffer, scratch_buffer_size);
 
+    if (!teeio_spdm_apply_version_override(spdm_context)) {
+        free(m_scratch_buffer);
+        m_scratch_buffer = NULL;
+        free(m_spdm_context);
+        m_spdm_context = NULL;
+        return NULL;
+    }
 
     libspdm_zero_mem(&parameter, sizeof(parameter));
     parameter.location = LIBSPDM_DATA_LOCATION_LOCAL;
@@ -108,6 +182,7 @@ void *spdm_client_init(void)
         SPDM_GET_CAPABILITIES_REQUEST_FLAGS_ENCAP_CAP |
         /* SPDM_GET_CAPABILITIES_REQUEST_FLAGS_HBEAT_CAP | */
         SPDM_GET_CAPABILITIES_REQUEST_FLAGS_KEY_UPD_CAP |
+        SPDM_GET_CAPABILITIES_REQUEST_FLAGS_CHUNK_CAP |
         /* SPDM_GET_CAPABILITIES_REQUEST_FLAGS_HANDSHAKE_IN_THE_CLEAR_CAP | */
         /* SPDM_GET_CAPABILITIES_REQUEST_FLAGS_PUB_KEY_ID_CAP | */
         0);
@@ -126,6 +201,9 @@ void *spdm_client_init(void)
     data32 |= SPDM_ALGORITHMS_BASE_HASH_ALGO_TPM_ALG_SHA_256;
     libspdm_set_data(spdm_context, LIBSPDM_DATA_BASE_HASH_ALGO, &parameter,
                      &data32, sizeof(data32));
+    data32 = SPDM_ALGORITHMS_PQC_ASYM_ALGO_ML_DSA_87;
+    libspdm_set_data(spdm_context, LIBSPDM_DATA_PQC_ASYM_ALGO, &parameter,
+                     &data32, sizeof(data32));
     data16 = SPDM_ALGORITHMS_DHE_NAMED_GROUP_SECP_384_R1;
     data16 |= SPDM_ALGORITHMS_DHE_NAMED_GROUP_SECP_256_R1;
     libspdm_set_data(spdm_context, LIBSPDM_DATA_DHE_NAME_GROUP, &parameter,
@@ -142,6 +220,9 @@ void *spdm_client_init(void)
     data8 = SPDM_ALGORITHMS_OPAQUE_DATA_FORMAT_1;
     libspdm_set_data(spdm_context, LIBSPDM_DATA_OTHER_PARAMS_SUPPORT, &parameter,
                      &data8, sizeof(data8));
+    data32 = SPDM_ALGORITHMS_KEM_ALG_ML_KEM_1024;
+    libspdm_set_data(spdm_context, LIBSPDM_DATA_KEM_ALG, &parameter,
+                     &data32, sizeof(data32));
 
     status = libspdm_init_connection(spdm_context, false);
     if (LIBSPDM_STATUS_IS_ERROR(status)) {
@@ -150,6 +231,8 @@ void *spdm_client_init(void)
         m_spdm_context = NULL;
         return NULL;
     }
+
+    teeio_spdm_log_negotiated_version(spdm_context);
 
     return m_spdm_context;
 }

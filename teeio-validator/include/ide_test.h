@@ -66,6 +66,8 @@
 
 #define MAIN_SECION "Main"
 #define MAIN_SECTION_PCI_LOG "pci_log"
+#define MAIN_SECTION_SPDM_VERSION "spdm_version"
+#define TEEIO_SPDM_VERSION_AUTO 0
 
 #define PORTS_SECTION "Ports"
 #define TOPOLOGY_SECTION "Topology_%d"
@@ -178,6 +180,7 @@ typedef struct
   bool doe_log;
   bool wo_tdisp;
   bool pcap_enable;
+  uint8_t spdm_version;
 } IDE_TEST_MAIN_CONFIG;
 
 typedef struct {

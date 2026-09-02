@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include "ide_test.h"
 #include "command.h"
+#include "teeio_spdmlib.h"
 
 char g_bdf[] = {'2','a',':','0','0','.','0','\0'};
 char g_rp_bdf[] = {'2','9',':','0','2','.','0','\0'};
@@ -112,6 +113,7 @@ int main(int argc, char *argv[])
     g_pci_log = ide_test_config.main_config.pci_log;
     g_libspdm_log = ide_test_config.main_config.libspdm_log;
     g_doe_log = ide_test_config.main_config.doe_log;
+    teeio_spdm_set_version(ide_test_config.main_config.spdm_version);
 
     if(debug_level == TEEIO_DEBUG_NUM) {
         g_debug_level = ide_test_config.main_config.debug_level;

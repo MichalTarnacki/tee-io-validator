@@ -28,12 +28,15 @@ assert manifest["schema_version"] == 1
 assert manifest["dry_run"] is True
 assert manifest["result"] == "planned"
 assert len(manifest["scenarios"]) == 34
+assert manifest["scenario_count"] == 34
+assert len(manifest["scenario_names"]) == 34
 assert all(item["status"] == "planned" for item in manifest["scenarios"])
 assert all(item["expected"] for item in manifest["scenarios"])
 assert len(manifest["binary_sha256"]) == 64
 assert len(manifest["catalog_sha256"]) == 64
 assert manifest["commit"]
 assert manifest["submodules"]
+assert len(manifest["libspdm_revision"]) == 40
 PY
 
 cat > "${work_dir}/fake_validator.py" <<'PY'

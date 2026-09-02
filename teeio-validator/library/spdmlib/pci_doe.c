@@ -27,7 +27,8 @@
 #define PCI_EXPRESS_REG_DOE_WRITE_DATA_MAILBOX_OFFSET 0x10
 #define PCI_EXPRESS_REG_DOE_READ_DATA_MAILBOX_OFFSET 0x14
 
-#define PCI_EXPRESS_DOE_MAILBOX_TIMEOUT 300000000   // 30 second, enough for debug device to respond
+#define PCI_EXPRESS_DOE_MAILBOX_TIMEOUT_US 30000000
+#define PCI_EXPRESS_DOE_POLL_INTERVAL_US 30
 /* PCI Express - end */
 
 extern int m_dev_fp;
@@ -278,7 +279,8 @@ libspdm_return_t device_doe_send_message(
     uint32_t index;
     uint64_t delay;
     uint32_t data_object_count;
-    uint32_t *data_object_buffer;
+    const uint32_t *data_object_buffer;
+    const uint8_t *data_object_bytes;
     teeio_fault_result_t fault_result;
 
     check_pcie_advance_error();
@@ -334,10 +336,10 @@ libspdm_return_t device_doe_send_message(
     TEEIO_DOE_DEBUG ((TEEIO_DEBUG_INFO, "[device_doe_send_message] Start ... \n"));
 
     if (timeout == 0) {
-      timeout = PCI_EXPRESS_DOE_MAILBOX_TIMEOUT;
+            timeout = PCI_EXPRESS_DOE_MAILBOX_TIMEOUT_US;
     }
 
-    delay = timeout / 30 + 1;
+        delay = timeout / PCI_EXPRESS_DOE_POLL_INTERVAL_US + 1;
 
     if (is_doe_error_asserted()) {
         TEEIO_DEBUG ((TEEIO_DEBUG_ERROR, "[device_doe_send_message] 'DOE Error' bit is set before sending message. Clear error bit and wait 1 second.\n"));
@@ -354,11 +356,12 @@ libspdm_return_t device_doe_send_message(
             TEEIO_DOE_DEBUG ((TEEIO_DEBUG_VERBOSE, "Requester: \n"));
             for (index = 0; index < data_object_count; index++) { 
                 device_pci_doe_write_mailbox_write_32 (data_object_buffer[index]);
+                data_object_bytes = (const uint8_t *)(data_object_buffer + index);
                 TEEIO_DOE_DEBUG((TEEIO_DEBUG_VERBOSE, "mailbox: 0x%08x\n", data_object_buffer[index]));
-                TEEIO_DOE_DEBUG ((TEEIO_DEBUG_VERBOSE,"%02x %02x %02x %02x \n", *((uint8_t*)(data_object_buffer + index) + 0),
-                                                            *((uint8_t*)(data_object_buffer + index) + 1),
-                                                            *((uint8_t*)(data_object_buffer + index) + 2),
-                                                            *((uint8_t*)(data_object_buffer + index) + 3)));
+                TEEIO_DOE_DEBUG ((TEEIO_DEBUG_VERBOSE,"%02x %02x %02x %02x \n", data_object_bytes[0],
+                                                            data_object_bytes[1],
+                                                            data_object_bytes[2],
+                                                            data_object_bytes[3]));
             }
             TEEIO_DOE_DEBUG ((TEEIO_DEBUG_VERBOSE,"\n"));
 
@@ -374,7 +377,7 @@ libspdm_return_t device_doe_send_message(
                 TEEIO_DEBUG ((TEEIO_DEBUG_ERROR, "[device_doe_send_message] DOE error is found. Exiting!\n"));
                 break;
             }
-            libspdm_sleep (30 * 1000);
+            libspdm_sleep(PCI_EXPRESS_DOE_POLL_INTERVAL_US);
             delay--;
         }
     } while (delay != 0);
@@ -418,12 +421,12 @@ libspdm_return_t device_doe_receive_message(
 
     check_pcie_advance_error();
 
-    TEEIO_DOE_DEBUG ((TEEIO_DEBUG_INFO, "[device_doe_receive_message] Start ... \n"));
-    TEEIO_DOE_DEBUG ((TEEIO_DEBUG_INFO, "[device_doe_receive_message] Response_size = 0x%x \n", *response_size));
-
     if (response_size == NULL || response == NULL || *response == NULL) {
         return LIBSPDM_STATUS_INVALID_PARAMETER;
     }
+
+    TEEIO_DOE_DEBUG ((TEEIO_DEBUG_INFO, "[device_doe_receive_message] Start ... \n"));
+    TEEIO_DOE_DEBUG ((TEEIO_DEBUG_INFO, "[device_doe_receive_message] Response_size = 0x%x \n", *response_size));
 
     response_capacity = *response_size;
     if (m_fault_skip_receive) {
@@ -444,11 +447,10 @@ libspdm_return_t device_doe_receive_message(
     }
 
     if (timeout == 0) {
-        timeout = PCI_EXPRESS_DOE_MAILBOX_TIMEOUT;
+        timeout = PCI_EXPRESS_DOE_MAILBOX_TIMEOUT_US;
     }
 
-    //delay = timeout / 30 + 1;
-    delay = 0x1000000 / 30 + 1; //make sure debug device have enough time to write to mailbox
+    delay = timeout / PCI_EXPRESS_DOE_POLL_INTERVAL_US + 1;
 
     data_object_buffer = (uint32_t *)*response;
     data_object_header = (pci_doe_data_object_header_t *)*response;
@@ -521,7 +523,7 @@ libspdm_return_t device_doe_receive_message(
                 TEEIO_DEBUG ((TEEIO_DEBUG_ERROR, "[device_doe_receive_message] 'DOE Error' bit is set. Quit the reading loop\n"));
                 break;
             }
-            libspdm_sleep (30 * 1000);
+            libspdm_sleep(PCI_EXPRESS_DOE_POLL_INTERVAL_US);
             delay--;
         }
     } while (delay != 0);

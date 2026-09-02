@@ -27,7 +27,9 @@ pattern=1f
 ```
 
 `scenario` selects all enabled rules with the same name. At least one matching
-rule is required when fault injection is enabled.
+rule is required when fault injection is enabled. `libspdm_revision` pins the
+catalog to the libspdm wire layout used by offset-based rules; host and campaign
+tools reject a mismatched checkout.
 
 Each `[FaultRule_N]` supports:
 

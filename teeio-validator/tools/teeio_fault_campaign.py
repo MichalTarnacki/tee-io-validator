@@ -160,6 +160,13 @@ def main() -> int:
         catalog = read_catalog(catalog_path)
         available = catalog_scenarios(catalog)
         repo = find_repo(Path(__file__).resolve().parent)
+        expected_libspdm = catalog["FaultInjection"].get("libspdm_revision", "")
+        actual_libspdm = run_git(repo / "spdm-emu" / "libspdm", "rev-parse", "HEAD")
+        if not expected_libspdm or actual_libspdm != expected_libspdm:
+            raise ValueError(
+                f"catalog requires libspdm {expected_libspdm or '<missing>'}, "
+                f"checkout has {actual_libspdm}"
+            )
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"campaign: {error}", file=sys.stderr)
         return 2
@@ -191,6 +198,9 @@ def main() -> int:
         "binary_sha256": sha256(binary),
         "catalog": str(catalog_path),
         "catalog_sha256": sha256(catalog_path),
+        "libspdm_revision": actual_libspdm,
+        "scenario_count": len(selected),
+        "scenario_names": selected,
         "extra_args": extra_args,
         "positive": None,
         "scenarios": [],

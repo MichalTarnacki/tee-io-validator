@@ -116,6 +116,7 @@ teeio_fault_result_t teeio_fault_apply(teeio_fault_direction_t direction,
 bool teeio_fault_scenario_fired(void);
 uint32_t teeio_fault_fire_count(void);
 const char *teeio_fault_audit_record(void);
+bool teeio_fault_should_record_response(void);
 void teeio_fault_record_actual(const char *actual);
 const char *teeio_fault_result_record(void);
 

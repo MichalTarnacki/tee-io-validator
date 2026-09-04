@@ -77,7 +77,7 @@ static void set_fault_plain_header(uint8_t *message, size_t message_size,
 {
     uint32_t dword_length = (uint32_t)((message_size + 3) / 4);
 
-    memset(message, 0, LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE);
+    memset(message, 0, sizeof(pci_doe_data_object_header_t));
     message[2] = secured ? TEEIO_FAULT_DOE_TYPE_PLAIN_SECURED_SPDM :
                            TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM;
     message[4] = (uint8_t)dword_length;
@@ -93,23 +93,25 @@ static bool apply_plain_fault(teeio_fault_direction_t direction,
     teeio_fault_result_t result;
     size_t framed_size;
 
-    framed_size = *message_size + LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE;
+    framed_size = *message_size + sizeof(pci_doe_data_object_header_t);
     if (framed_size > TEEIO_FAULT_MAX_MESSAGE_SIZE) {
         return false;
     }
     set_fault_plain_header(plain_buffer, framed_size, secured);
-    memcpy(plain_buffer + LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE,
+    memcpy(plain_buffer + sizeof(pci_doe_data_object_header_t),
            *message, *message_size);
     result = teeio_fault_apply(direction, plain_buffer, framed_size,
                                TEEIO_FAULT_MAX_MESSAGE_SIZE);
     if (result.disposition == TEEIO_FAULT_DISPOSITION_PASS) {
-        if (direction == TEEIO_FAULT_DIRECTION_RECEIVE) {
+        if (direction == TEEIO_FAULT_DIRECTION_RECEIVE &&
+            teeio_fault_should_record_response()) {
             record_spdm_actual(*message, *message_size);
         }
         return true;
     }
-    if (result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE ||
-        result.message_size < LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE) {
+    if ((result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE &&
+         result.disposition != TEEIO_FAULT_DISPOSITION_REPLAY) ||
+        result.message_size < sizeof(pci_doe_data_object_header_t)) {
         TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
                      "Unsupported plaintext fault disposition: %s\n",
                      teeio_fault_audit_record()));
@@ -119,11 +121,8 @@ static bool apply_plain_fault(teeio_fault_direction_t direction,
     TEEIO_DEBUG((TEEIO_DEBUG_WARN, "Plaintext fault injection: %s\n",
                  teeio_fault_audit_record()));
     memcpy(plain_buffer, result.message, result.message_size);
-    *message = plain_buffer + LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE;
-    *message_size = result.message_size - LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE;
-    if (direction == TEEIO_FAULT_DIRECTION_RECEIVE) {
-        record_spdm_actual(*message, *message_size);
-    }
+    *message = plain_buffer + sizeof(pci_doe_data_object_header_t);
+    *message_size = result.message_size - sizeof(pci_doe_data_object_header_t);
     return true;
 }
 
@@ -383,12 +382,14 @@ libspdm_return_t device_doe_send_message(
     } while (delay != 0);
 
     if (delay == 0) {
+        teeio_fault_record_actual("send_timeout");
         status = LIBSPDM_STATUS_SEND_FAIL;
     } else {
         /* check ERROR bit again */
         if (is_doe_error_asserted()) {
+            teeio_fault_record_actual("doe_error");
             status = LIBSPDM_STATUS_SEND_FAIL;
-            TEEIO_DEBUG ((TEEIO_DEBUG_ERROR, "[device_doe_send_message] 'DOE Error' bit is set. Send failedl. Clear error bit and wait 1 second.\n"));
+            TEEIO_DEBUG ((TEEIO_DEBUG_ERROR, "[device_doe_send_message] 'DOE Error' bit is set. Send failed. Clear error bit and wait 1 second.\n"));
             /* Write 1b to the DOE Abort bit and wait 1 second. */
             trigger_doe_abort();
             libspdm_sleep(1000*1000);
@@ -597,13 +598,13 @@ libspdm_return_t device_doe_receive_message(
         if (LIBSPDM_STATUS_IS_ERROR(duplicate_status)) {
             teeio_fault_record_actual("duplicate_exchange_failed");
         } else if (duplicate_response_size >=
-                   LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE +
+                   sizeof(pci_doe_data_object_header_t) +
                    sizeof(spdm_message_header_t)) {
             record_spdm_actual(
                 m_fault_duplicate_response +
-                LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE,
+                sizeof(pci_doe_data_object_header_t),
                 duplicate_response_size -
-                LIBSPDM_PCI_DOE_TRANSPORT_HEADER_SIZE);
+                sizeof(pci_doe_data_object_header_t));
         } else {
             teeio_fault_record_actual("duplicate_exchange_complete");
         }

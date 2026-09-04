@@ -30,6 +30,7 @@ static char m_actual[TEEIO_FAULT_MAX_EXPECTED_SIZE];
 static bool m_waiting_for_actual;
 static int m_active_rule_id;
 static teeio_fault_disposition_t m_active_disposition;
+static teeio_fault_direction_t m_active_direction;
 static uint32_t m_active_match_count;
 
 static void set_error(char *error, size_t error_size, const char *format, ...)
@@ -244,6 +245,7 @@ void teeio_fault_init(teeio_fault_config_t *config)
     m_waiting_for_actual = false;
     m_active_rule_id = -1;
     m_active_disposition = TEEIO_FAULT_DISPOSITION_PASS;
+    m_active_direction = TEEIO_FAULT_DIRECTION_MAX;
     m_active_match_count = 0;
     teeio_fault_reset();
 }
@@ -262,6 +264,14 @@ static void write_u32(uint8_t *data, uint32_t value)
     data[1] = (uint8_t)(value >> 8);
     data[2] = (uint8_t)(value >> 16);
     data[3] = (uint8_t)(value >> 24);
+}
+
+static void update_doe_length(size_t message_size)
+{
+    if (message_size >= TEEIO_DOE_HEADER_SIZE) {
+        write_u32(m_primary + TEEIO_DOE_LENGTH_OFFSET,
+                  (uint32_t)((message_size + 3) / 4));
+    }
 }
 
 static bool rule_matches(teeio_fault_rule_t *rule,
@@ -335,12 +345,14 @@ static teeio_fault_disposition_t apply_mutation(const teeio_fault_rule_t *rule,
             return TEEIO_FAULT_DISPOSITION_ERROR;
         }
         *message_size -= rule->size;
+        update_doe_length(*message_size);
         return TEEIO_FAULT_DISPOSITION_MUTATE;
     case TEEIO_FAULT_ACTION_TRUNCATE_TO:
         if (rule->size >= *message_size) {
             return TEEIO_FAULT_DISPOSITION_ERROR;
         }
         *message_size = rule->size;
+        update_doe_length(*message_size);
         return TEEIO_FAULT_DISPOSITION_MUTATE;
     case TEEIO_FAULT_ACTION_EXTEND:
         index = rule->size == 0 ? rule->pattern_size : rule->size;
@@ -353,6 +365,13 @@ static teeio_fault_disposition_t apply_mutation(const teeio_fault_rule_t *rule,
                 rule->pattern[pattern_index % rule->pattern_size];
         }
         *message_size += index;
+        update_doe_length(*message_size);
+        if (rule->declared_length != 0) {
+            if (rule->offset + sizeof(uint32_t) > *message_size) {
+                return TEEIO_FAULT_DISPOSITION_ERROR;
+            }
+            write_u32(m_primary + rule->offset, rule->declared_length);
+        }
         return TEEIO_FAULT_DISPOSITION_MUTATE;
     case TEEIO_FAULT_ACTION_SET_DECLARED_LENGTH:
         if (*message_size < TEEIO_DOE_HEADER_SIZE) {
@@ -437,6 +456,23 @@ teeio_fault_result_t teeio_fault_apply(teeio_fault_direction_t direction,
             } else {
                 output_size = m_previous_size[direction];
                 memcpy(m_primary, m_previous[direction], output_size);
+                if (rule->pattern_size != 0) {
+                    size_t replay_offset = rule->offset;
+                    if (rule->offset_from_end) {
+                        if (rule->offset == 0 || rule->offset > output_size) {
+                            disposition = TEEIO_FAULT_DISPOSITION_ERROR;
+                        } else {
+                            replay_offset = output_size - rule->offset;
+                        }
+                    }
+                    if (disposition != TEEIO_FAULT_DISPOSITION_ERROR &&
+                        replay_offset + rule->pattern_size <= output_size) {
+                        memcpy(m_primary + replay_offset, rule->pattern,
+                               rule->pattern_size);
+                    } else {
+                        disposition = TEEIO_FAULT_DISPOSITION_ERROR;
+                    }
+                }
             }
         } else if (disposition == TEEIO_FAULT_DISPOSITION_REORDER) {
             if (m_held_size[direction] == 0) {
@@ -470,6 +506,7 @@ teeio_fault_result_t teeio_fault_apply(teeio_fault_direction_t direction,
              rule->expected);
         m_active_rule_id = rule->id;
         m_active_disposition = disposition;
+        m_active_direction = direction;
         m_active_match_count = rule->match_count;
         m_actual[0] = '\0';
         m_waiting_for_actual = true;
@@ -494,8 +531,8 @@ teeio_fault_result_t teeio_fault_apply(teeio_fault_direction_t direction,
                  teeio_fault_direction_name(direction),
                  teeio_fault_action_name(rule->action), rule->match_count,
                  message_size, result.message_size,
-                 message_size >= TEEIO_DOE_HEADER_SIZE ?
-             read_u32(input + TEEIO_DOE_LENGTH_OFFSET) : 0,
+                 output_size >= TEEIO_DOE_HEADER_SIZE ?
+             read_u32(m_primary + TEEIO_DOE_LENGTH_OFFSET) : 0,
              rule->expected);
 
         memcpy(m_previous[direction], input, message_size);
@@ -521,6 +558,12 @@ uint32_t teeio_fault_fire_count(void)
 const char *teeio_fault_audit_record(void)
 {
     return m_audit;
+}
+
+bool teeio_fault_should_record_response(void)
+{
+    return m_waiting_for_actual &&
+           m_active_direction == TEEIO_FAULT_DIRECTION_SEND;
 }
 
 void teeio_fault_record_actual(const char *actual)

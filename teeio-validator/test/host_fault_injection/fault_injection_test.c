@@ -151,6 +151,7 @@ static void test_xor(void)
     result = teeio_fault_apply(TEEIO_FAULT_DIRECTION_SEND, message,
                                sizeof(message), sizeof(message));
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
+    CHECK(teeio_fault_should_record_response());
     CHECK(result.message[12] == (uint8_t)(0x11 ^ 0xff));
 
     rule->offset = 1;
@@ -160,6 +161,13 @@ static void test_xor(void)
                                sizeof(message), sizeof(message));
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
     CHECK(result.message[15] == 0xff);
+
+    rule->direction = TEEIO_FAULT_DIRECTION_RECEIVE;
+    teeio_fault_reset();
+    result = teeio_fault_apply(TEEIO_FAULT_DIRECTION_RECEIVE, message,
+                               sizeof(message), sizeof(message));
+    CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
+    CHECK(!teeio_fault_should_record_response());
 }
 
 static void test_resize_and_atomic_rejection(void)
@@ -178,6 +186,7 @@ static void test_resize_and_atomic_rejection(void)
                                sizeof(message), sizeof(message));
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
     CHECK(result.message_size == 12);
+    CHECK(result.message[4] == 3);
 
     rule->action = TEEIO_FAULT_ACTION_TRUNCATE_TO;
     rule->size = 12;
@@ -186,6 +195,7 @@ static void test_resize_and_atomic_rejection(void)
                                sizeof(message), sizeof(message));
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
     CHECK(result.message_size == 12);
+    CHECK(result.message[4] == 3);
 
     rule->action = TEEIO_FAULT_ACTION_TRUNCATE;
     rule->size = 1;
@@ -198,6 +208,8 @@ static void test_resize_and_atomic_rejection(void)
 
     rule->action = TEEIO_FAULT_ACTION_EXTEND;
     rule->size = 0;
+    rule->offset = 8;
+    rule->declared_length = 0x12345678;
     rule->pattern[0] = 0xde;
     rule->pattern[1] = 0xad;
     rule->pattern[2] = 0xbe;
@@ -208,6 +220,9 @@ static void test_resize_and_atomic_rejection(void)
                                sizeof(message), sizeof(message) + 4);
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
     CHECK(result.message_size == 20);
+    CHECK(result.message[4] == 5);
+        CHECK(result.message[8] == 0x78 && result.message[9] == 0x56 &&
+            result.message[10] == 0x34 && result.message[11] == 0x12);
     CHECK(result.message[16] == 0xde && result.message[19] == 0xef);
 }
 
@@ -228,6 +243,8 @@ static void test_declared_length(void)
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
     CHECK(result.message[4] == 0x78 && result.message[5] == 0x56 &&
           result.message[6] == 0x34 && result.message[7] == 0x12);
+    CHECK(strstr(teeio_fault_audit_record(),
+                 "\"doe_length\":305419896") != NULL);
 }
 
 static void test_drop_and_abandon(void)
@@ -284,6 +301,9 @@ static void test_replay(void)
     make_message(second, 0x26);
     rule = init_rule(&config, TEEIO_FAULT_ACTION_REPLAY);
     rule->occurrence = 2;
+    rule->offset = 8;
+    rule->pattern[0] = 0x13;
+    rule->pattern_size = 1;
     teeio_fault_init(&config);
     result = teeio_fault_apply(TEEIO_FAULT_DIRECTION_SEND, first,
                                sizeof(first), sizeof(first));
@@ -291,7 +311,33 @@ static void test_replay(void)
     result = teeio_fault_apply(TEEIO_FAULT_DIRECTION_SEND, second,
                                sizeof(second), sizeof(second));
     CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_REPLAY);
+    CHECK(result.message[8] == 0x13);
     CHECK(result.message[12] == 0x16);
+}
+
+static void test_plain_secured_selector(void)
+{
+    teeio_fault_config_t config;
+    teeio_fault_rule_t *rule;
+    teeio_fault_result_t result;
+    uint8_t message[TEST_MESSAGE_SIZE];
+
+    m_tests++;
+    make_message(message, 0x19);
+    message[2] = TEEIO_FAULT_DOE_TYPE_PLAIN_SECURED_SPDM;
+    message[9] = 0xe5;
+    rule = init_rule(&config, TEEIO_FAULT_ACTION_XOR);
+    rule->doe_type = TEEIO_FAULT_DOE_TYPE_PLAIN_SECURED_SPDM;
+    rule->spdm_code = 0xe5;
+    rule->offset = 1;
+    rule->offset_from_end = true;
+    rule->pattern[0] = 1;
+    rule->pattern_size = 1;
+    teeio_fault_init(&config);
+    result = teeio_fault_apply(TEEIO_FAULT_DIRECTION_SEND, message,
+                               sizeof(message), sizeof(message));
+    CHECK(result.disposition == TEEIO_FAULT_DISPOSITION_MUTATE);
+    CHECK(result.message[15] == 1);
 }
 
 static void test_reorder(void)
@@ -351,6 +397,7 @@ int main(void)
     test_drop_and_abandon();
     test_duplicate();
     test_replay();
+    test_plain_secured_selector();
     test_reorder();
     test_reset();
 

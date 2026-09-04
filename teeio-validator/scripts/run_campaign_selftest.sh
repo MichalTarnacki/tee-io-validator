@@ -24,13 +24,14 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as stream:
     manifest = json.load(stream)
 
-assert manifest["schema_version"] == 1
+assert manifest["schema_version"] == 2
 assert manifest["dry_run"] is True
 assert manifest["result"] == "planned"
 assert len(manifest["scenarios"]) == 34
 assert manifest["scenario_count"] == 34
 assert len(manifest["scenario_names"]) == 34
-assert all(item["status"] == "planned" for item in manifest["scenarios"])
+assert sum(item["status"] == "planned" for item in manifest["scenarios"]) == 30
+assert sum(item["status"] == "blocked" for item in manifest["scenarios"]) == 4
 assert all(item["expected"] for item in manifest["scenarios"])
 assert len(manifest["binary_sha256"]) == 64
 assert len(manifest["catalog_sha256"]) == 64
@@ -48,6 +49,10 @@ import sys
 ini = sys.argv[sys.argv.index("-f") + 1]
 config = configparser.ConfigParser(interpolation=None)
 config.read(ini)
+if not config["FaultInjection"].getboolean("enabled"):
+    driver = sys.argv[sys.argv.index("-s") + 1]
+    print(f"TestCase {driver}: pass")
+    raise SystemExit(0)
 scenario = config["FaultInjection"]["scenario"]
 expected = next(
     config[section]["expected"]
@@ -88,10 +93,12 @@ with open(sys.argv[1], encoding="utf-8") as stream:
 
 assert manifest["result"] == "pass"
 assert len(manifest["scenarios"]) == 1
-assert manifest["scenarios"][0]["status"] == "executed"
+assert manifest["scenarios"][0]["status"] == "pass"
 assert manifest["scenarios"][0]["result"]["actual"] == "spdm_error_0x01"
+assert manifest["scenarios"][0]["recovery"]["status"] == "pass"
 PY
 test -s "${work_dir}/executed/logs/B1_reserved_version.log"
+test -s "${work_dir}/executed/recovery-logs/B1_reserved_version.log"
 
 if python3 "$campaign" \
     --binary "$binary" \

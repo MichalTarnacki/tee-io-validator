@@ -114,6 +114,7 @@ bool teeio_fault_validate_rule(const teeio_fault_rule_t *rule, char *error,
 void teeio_fault_init(IDE_TEST_FAULT_CONFIG *config);
 void teeio_fault_reset(void);
 bool teeio_fault_is_enabled(void);
+bool teeio_fault_scenario_is(const char *scenario);
 
 teeio_fault_result_t teeio_fault_apply(teeio_fault_direction_t direction,
                                        const void *message,

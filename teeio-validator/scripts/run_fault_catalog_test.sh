@@ -19,8 +19,10 @@ if [[ ${#scenario_files[@]} -eq 0 ]]; then
 fi
 
 for scenario_file in "${scenario_files[@]}"; do
+    driver=$(awk -F= '/^[[:space:]]*driver[[:space:]]*=/{gsub(/[[:space:]]/, "", $2); print $2; exit}' "$scenario_file")
+    driver=${driver:-Version.1}
     set +e
-    output=$(cd "$work_dir"; "$binary" -f "$scenario_file" -t 1 -c 1 -s Version.1 -l verbose 2>&1)
+    output=$(cd "$work_dir"; "$binary" -f "$scenario_file" -t 1 -c 1 -s "$driver" -l verbose 2>&1)
     status=$?
     set -e
     if [[ $status -ne 0 && $status -ne 255 ]]; then

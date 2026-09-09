@@ -95,9 +95,12 @@ TEST(FaultInjectionStateTest, EnabledRequiresConfiguredRule)
 
     teeio_fault_init(&config);
     EXPECT_FALSE(teeio_fault_is_enabled());
+    EXPECT_FALSE(teeio_fault_scenario_is("test_case"));
     InitRule(&config, TEEIO_FAULT_ACTION_DROP);
     teeio_fault_init(&config);
     EXPECT_TRUE(teeio_fault_is_enabled());
+    EXPECT_TRUE(teeio_fault_scenario_is("test_case"));
+    EXPECT_FALSE(teeio_fault_scenario_is("other_case"));
 }
 
 TEST(FaultInjectionSelectorTest, MatchesSelectorsAndOccurrence)

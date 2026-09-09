@@ -56,9 +56,23 @@ static bool m_fault_draining_duplicate;
 static void record_spdm_actual(const uint8_t *message, size_t message_size)
 {
     char actual[64];
+    size_t chunk_header_size;
 
     if (message == NULL || message_size < sizeof(spdm_message_header_t)) {
         return;
+    }
+    if (message[1] == SPDM_CHUNK_SEND_ACK) {
+        chunk_header_size = message[0] >= SPDM_MESSAGE_VERSION_14 ?
+            sizeof(spdm_chunk_send_ack_response_14_t) :
+            sizeof(spdm_chunk_send_ack_response_t);
+        if (message_size <= chunk_header_size) {
+            return;
+        }
+        message += chunk_header_size;
+        message_size -= chunk_header_size;
+        if (message_size < sizeof(spdm_message_header_t)) {
+            return;
+        }
     }
     if (message[1] == SPDM_ERROR) {
         snprintf(actual, sizeof(actual), "spdm_error_0x%02x", message[2]);

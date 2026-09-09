@@ -277,6 +277,21 @@ bool teeio_fault_is_enabled(void)
     return m_config != NULL && m_config->rule_count != 0;
 }
 
+bool teeio_fault_scenario_is(const char *scenario)
+{
+    uint32_t index;
+
+    if (m_config == NULL || scenario == NULL) {
+        return false;
+    }
+    for (index = 0; index < m_config->rule_count; index++) {
+        if (strcmp(m_config->rules[index].scenario, scenario) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static uint32_t read_u32(const uint8_t *data)
 {
     return (uint32_t)data[0] |

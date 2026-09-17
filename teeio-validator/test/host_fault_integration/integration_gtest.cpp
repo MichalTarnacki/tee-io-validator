@@ -149,6 +149,10 @@ TEST_F(CatalogTest, StrictChunkTransferConfigurations)
     EXPECT_EQ(Value(ini, "FaultRule_1", "occurrence"), "1");
     EXPECT_EQ(Value(ini, "FaultRule_1", "action"), e.action);
     EXPECT_EQ(Value(ini, "FaultRule_1", "spdm_code"), e.code);
+    if (e.case_id == 2) {
+      EXPECT_EQ(Value(ini, "FaultRule_1", "size"), "8");
+      EXPECT_EQ(Value(ini, "FaultRule_1", "pattern"), "0000000000000000");
+    }
     EXPECT_EQ(ini.at("FaultRule_1").count("blocked_reason"), 0u);
     EXPECT_EQ(ini.at("FaultRule_1").count("runnable"), 0u);
     const std::string recovery = Value(ini, "FaultRule_1", "recovery");

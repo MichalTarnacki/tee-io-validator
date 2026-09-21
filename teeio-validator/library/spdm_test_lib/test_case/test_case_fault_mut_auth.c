@@ -17,6 +17,13 @@
 #include "hal/library/cryptlib/cryptlib_cert.h"
 #include "teeio_fault_fixture.h"
 
+#define FINISH_SIG_SET(type, value) \
+  do { \
+    if (!finish_sig_set(context->spdm_context, type, &(value), sizeof(value))) { \
+      return false; \
+    } \
+  } while (0)
+
 /* Integration: build the requester AND its secret/signing library with
  * LIBSPDM_ENABLE_CAPABILITY_MUT_AUTH_CAP=1; register these setup/run exports
  * only for the FINISH-signature Fault driver. Use the ordinary context teardown.
@@ -278,6 +285,8 @@ static bool finish_sig_connect_and_get_certificate(void *spdm)
       data32 != FINISH_SIG_HASH ||
       !finish_sig_get(spdm, LIBSPDM_DATA_REQ_PQC_ASYM_ALG, &data32, sizeof(data32)) ||
       data32 != 0) {
+    TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+      "FINISH signature prerequisites unavailable: require negotiated MUT_AUTH, requester P-384 and SHA-384; no signature mutation performed\n"));
     return false;
   }
   teeio_spdm_log_negotiated_version(spdm);
@@ -300,6 +309,7 @@ bool spdm_test_case_fault_mut_auth_setup(void *test_context)
   void *chain = NULL;
   size_t chain_size = 0;
   uint8_t digest[FINISH_SIG_HASH_SIZE];
+  spdm_version_number_t negotiated_version;
   uint8_t data8;
   uint16_t data16;
   uint32_t data32;
@@ -315,9 +325,6 @@ bool spdm_test_case_fault_mut_auth_setup(void *test_context)
       !teeio_spdm_apply_version_override(context->spdm_context)) {
     return false;
   }
-#define FINISH_SIG_SET(type, value) \
-  do { if (!finish_sig_set(context->spdm_context, type, &(value), sizeof(value))) \
-    return false; } while (0)
   data8 = 0;
   FINISH_SIG_SET(LIBSPDM_DATA_CAPABILITY_CT_EXPONENT, data8);
   /* Basic mutual auth: CERT_CAP + MUT_AUTH_CAP; no ENCAP or PUB_KEY_ID. */
@@ -350,7 +357,6 @@ bool spdm_test_case_fault_mut_auth_setup(void *test_context)
   FINISH_SIG_SET(LIBSPDM_DATA_OTHER_PARAMS_SUPPORT, data8);
   data8 = 1;
   FINISH_SIG_SET(LIBSPDM_DATA_LOCAL_SUPPORTED_SLOT_MASK, data8);
-#undef FINISH_SIG_SET
   if (!teeio_fault_fixture_sample_paths() ||
       !libspdm_read_requester_public_certificate_chain(
         FINISH_SIG_HASH, FINISH_SIG_ASYM, &chain, &chain_size, NULL, NULL)) {
@@ -358,12 +364,7 @@ bool spdm_test_case_fault_mut_auth_setup(void *test_context)
   }
   if (chain_size != sizeof(state->chain) ||
       !libspdm_hash_all(FINISH_SIG_HASH, chain, chain_size, digest) ||
-      !libspdm_consttime_is_mem_equal(digest, finish_sig_chain_hash, sizeof(digest)) ||
-      !libspdm_verify_cert_chain_data(
-        SPDM_MESSAGE_VERSION_12,
-        (uint8_t *)chain + sizeof(spdm_cert_chain_t) + FINISH_SIG_HASH_SIZE,
-        chain_size - sizeof(spdm_cert_chain_t) - FINISH_SIG_HASH_SIZE,
-        FINISH_SIG_ASYM, 0, FINISH_SIG_HASH, true, SPDM_CERTIFICATE_INFO_CERT_MODEL_DEVICE_CERT)) {
+      !libspdm_consttime_is_mem_equal(digest, finish_sig_chain_hash, sizeof(digest))) {
     free(chain);
     return false;
   }
@@ -374,6 +375,14 @@ bool spdm_test_case_fault_mut_auth_setup(void *test_context)
     return false;
   }
   if (!finish_sig_connect_and_get_certificate(context->spdm_context) ||
+      !finish_sig_get(context->spdm_context, LIBSPDM_DATA_SPDM_VERSION,
+                      &negotiated_version, sizeof(negotiated_version)) ||
+      !libspdm_verify_cert_chain_data(
+        (uint8_t)(negotiated_version >> SPDM_VERSION_NUMBER_SHIFT_BIT),
+        state->chain + sizeof(spdm_cert_chain_t) + FINISH_SIG_HASH_SIZE,
+        sizeof(state->chain) - sizeof(spdm_cert_chain_t) - FINISH_SIG_HASH_SIZE,
+        FINISH_SIG_ASYM, 0, FINISH_SIG_HASH, true,
+        SPDM_CERTIFICATE_INFO_CERT_MODEL_DEVICE_CERT) ||
       finish_sig_session(context, state, false) != LIBSPDM_STATUS_SUCCESS ||
       !state->signature_present || teeio_fault_fire_count() != 0) {
     return false;

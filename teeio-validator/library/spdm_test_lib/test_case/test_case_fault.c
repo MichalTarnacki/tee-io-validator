@@ -176,6 +176,178 @@ static bool certificate_signature_target(teeio_fault_test_buffer_t *state,
   return true;
 }
 
+/* Returns -1 on invalid transfer, 0 for no target, or 1 for a target chunk. */
+static int select_chunk_fault(teeio_fault_test_buffer_t *state,
+                              const uint8_t *bytes, size_t size,
+                              uint32_t *sequence, size_t *target_in_chunk)
+{
+  bool candidate = false;
+
+  if (bytes[1] == SPDM_CHUNK_SEND && size >= sizeof(spdm_chunk_send_request_t)) {
+    *sequence = chunk_sequence(bytes);
+    state->send_count++;
+    state->handle = bytes[3];
+    state->last_sequence = *sequence;
+    state->last_send_final =
+      (bytes[2] & SPDM_CHUNK_SEND_REQUEST_ATTRIBUTE_LAST_CHUNK) != 0;
+    if (state->missing) {
+      candidate = (bytes[2] & SPDM_CHUNK_SEND_REQUEST_ATTRIBUTE_LAST_CHUNK) != 0;
+      if (candidate && (*sequence == 0 || state->ack_count == 0)) {
+        state->invalid = true;
+      }
+    } else if (state->oversized) {
+      candidate = state->send_count == 1 && *sequence == 0;
+    } else if (!state->abandon && !state->backend_probe) {
+      size_t header = sizeof(spdm_chunk_send_request_t) + (*sequence == 0 ? 4 : 0);
+      size_t payload = libspdm_read_uint32(bytes + 8);
+      if (!state->certificate_target_valid || *sequence != state->send_count - 1 ||
+          size < header || payload != size - header ||
+          state->certificate_sent > state->certificate_request_size ||
+          payload > state->certificate_request_size - state->certificate_sent ||
+          (*sequence == 0 && (libspdm_read_uint32(bytes + 12) !=
+            state->certificate_request_size || payload < 4 ||
+            bytes[17] != SPDM_SET_CERTIFICATE)) ||
+          state->last_send_final !=
+            (payload == state->certificate_request_size - state->certificate_sent)) {
+        state->invalid = true;
+        return -1;
+      }
+      candidate = state->certificate_target >= state->certificate_sent &&
+        state->certificate_target - state->certificate_sent < payload;
+      if (candidate) {
+        *target_in_chunk = header + state->certificate_target - state->certificate_sent;
+        if (bytes[*target_in_chunk] != state->certificate_original) {
+          state->invalid = true;
+          return -1;
+        }
+      }
+      state->certificate_sent += payload;
+    }
+  } else if (state->abandon && bytes[1] == SPDM_CHUNK_GET &&
+             size >= sizeof(spdm_chunk_get_request_t)) {
+      /* A validated non-final CHUNK_RESPONSE, not an absolute occurrence,
+       * proves an actual partial GET_CERTIFICATE transfer is active. */
+      candidate = state->partial_response && bytes[3] == state->handle &&
+        chunk_sequence(bytes) == state->next_get_sequence;
+  }
+  return candidate;
+}
+
+static libspdm_return_t encode_corrupted_signature(
+  teeio_fault_test_buffer_t *state, void *spdm, const uint32_t *session_id,
+  bool app, bool request, size_t size, void *message,
+  size_t *transport_size, void **transport,
+  uint32_t sequence, size_t target_in_chunk)
+{
+  const uint8_t *bytes = message;
+  teeio_fault_result_t result;
+  /* Candidate-slice FI framing: real CHUNK_SEND selector plus exactly the
+    * DER-selected byte. offset=12 addresses this slice, NOT a wire offset.
+    * FI owns the XOR and audit; copy back only its one verified changed bit. */
+  uint8_t slice[13] = {0};
+  slice[2] = TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM;
+  libspdm_write_uint32(slice + 4, 4);
+  memcpy(slice + 8, bytes, 4);
+  slice[12] = bytes[target_in_chunk];
+  result = teeio_fault_apply(slice, sizeof(slice), sizeof(slice));
+  if (size + 8 > TEEIO_FAULT_MAX_MESSAGE_SIZE ||
+      result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE ||
+      result.message_size != sizeof(slice) ||
+      memcmp(result.message, slice, 12) != 0 ||
+      (result.message[12] ^ slice[12]) != 1 || teeio_fault_fire_count() != 1) {
+    state->invalid = true;
+    return LIBSPDM_STATUS_SEND_FAIL;
+  }
+  memcpy(state->frame + 8, message, size);
+  state->frame[8 + target_in_chunk] = result.message[12];
+  state->selected = true;
+  TEEIO_DEBUG((TEEIO_DEBUG_INFO,
+    "Certificate signature target: non-root cert index=1 ECDSA r LSB request_offset=%zu chunk=%u wire_offset=%zu bits=1\n",
+    state->certificate_target, sequence, target_in_chunk + 8));
+  return libspdm_transport_pci_doe_encode_message(spdm, session_id, app,
+    request, size, state->frame + 8, transport_size, transport);
+}
+
+static bool extend_chunk_from_request(teeio_fault_test_buffer_t *state,
+                                      void *spdm, const uint8_t *bytes,
+                                      size_t size)
+{
+  libspdm_chunk_info_t *send = &((libspdm_context_t *)spdm)->chunk_context.send;
+  size_t header = sizeof(spdm_chunk_send_request_t) + sizeof(uint32_t);
+  uint32_t payload = libspdm_read_uint32(bytes + 8);
+  if (size < header || payload != size - header ||
+      !send->chunk_in_use || send->large_message == NULL ||
+      send->large_message_size > send->large_message_capacity ||
+      send->large_message_size != libspdm_read_uint32(bytes + 12) ||
+      send->large_message_size <= (size_t)payload + 8 ||
+      send->chunk_bytes_transferred != payload ||
+      memcmp(bytes + header, send->large_message, payload) != 0) {
+    state->invalid = true;
+    return false;
+  }
+  /* Extend the declared chunk with its real continuation, not transport junk. */
+  memcpy(state->frame + 8 + size,
+         (const uint8_t *)send->large_message + payload, 8);
+  libspdm_write_uint32(state->frame + 8 + 8, payload + 8);
+  send->chunk_bytes_transferred += 8;
+  return true;
+}
+
+static bool apply_chunk_fault(teeio_fault_test_buffer_t *state, void *spdm,
+                              uint32_t sequence, size_t *size, void **message)
+{
+  teeio_fault_result_t result;
+  const uint8_t *bytes = *message;
+
+  if (*size + 8 + 4 > TEEIO_FAULT_MAX_MESSAGE_SIZE) {
+    state->invalid = true;
+    return false;
+  }
+  memset(state->frame, 0, 8);
+  state->frame[2] = TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM;
+  libspdm_write_uint32(state->frame + 4, (uint32_t)((*size + 11) / 4));
+  memcpy(state->frame + 8, *message, *size);
+  result = teeio_fault_apply(state->frame, *size + 8,
+                             TEEIO_FAULT_MAX_MESSAGE_SIZE - 3);
+  if (result.disposition == TEEIO_FAULT_DISPOSITION_PASS) {
+    return true;
+  }
+  state->selected = true;
+  if (state->abandon || state->missing) {
+    if (result.disposition != (state->abandon ?
+          TEEIO_FAULT_DISPOSITION_ABANDON : TEEIO_FAULT_DISPOSITION_DROP)) {
+      state->invalid = true;
+    }
+    teeio_fault_record_actual(state->abandon ?
+      "chunk_transfer_abandoned" : "final_chunk_withheld");
+    /* Fail the send locally: no hardware transmission or receive timeout,
+     * and no attempt to send a non-chunk request before GET_VERSION. */
+    return false;
+  }
+  if (result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE ||
+      result.message_size < 8 ||
+      result.message_size > TEEIO_FAULT_MAX_MESSAGE_SIZE - 3) {
+    state->invalid = true;
+    return false;
+  }
+  if (sequence != 0 || *size != state->data_transfer_size ||
+      result.message_size != *size + 16 ||
+      result.message_size - 8 <= state->data_transfer_size ||
+      memcmp(result.message + 8, *message, *size) != 0) {
+    /* Fail closed if the configured mutation does not exceed the peer's
+     * actual receive limit (the local limit may be smaller). */
+    state->invalid = true;
+    return false;
+  }
+  memcpy(state->frame, result.message, result.message_size);
+  if (!extend_chunk_from_request(state, spdm, bytes, *size)) {
+    return false;
+  }
+  *message = state->frame + 8;
+  *size = result.message_size - 8;
+  return true;
+}
+
 /* Scope plaintext FI to the operation under test, not setup, positive control,
  * or recovery. A per-context frame provides DOE headroom and padding even when
  * the encoder changes the returned buffer pointer (libspdm's zero-copy API).
@@ -186,157 +358,22 @@ static libspdm_return_t chunk_encode(
 {
   teeio_fault_test_buffer_t *state =
     ((libspdm_context_t *)spdm)->app_context_data_ptr;
-  const uint8_t *bytes = message;
-  teeio_fault_result_t result;
-  bool candidate = false;
+  int candidate = 0;
   uint32_t sequence = 0;
   size_t target_in_chunk = 0;
-  bool signature_flip = !state->abandon && !state->missing && !state->oversized;
   libspdm_return_t status;
 
   if ((state->armed || state->backend_probe) && !app && session_id == NULL && size >= 4) {
-    if (bytes[1] == SPDM_CHUNK_SEND && size >= sizeof(spdm_chunk_send_request_t)) {
-      sequence = chunk_sequence(bytes);
-      state->send_count++;
-      state->handle = bytes[3];
-      state->last_sequence = sequence;
-      state->last_send_final =
-        (bytes[2] & SPDM_CHUNK_SEND_REQUEST_ATTRIBUTE_LAST_CHUNK) != 0;
-      if (state->missing) {
-        candidate = (bytes[2] & SPDM_CHUNK_SEND_REQUEST_ATTRIBUTE_LAST_CHUNK) != 0;
-        if (candidate && (sequence == 0 || state->ack_count == 0)) {
-          state->invalid = true;
-        }
-      } else if (state->oversized) {
-        candidate = state->send_count == 1 && sequence == 0;
-      } else if (signature_flip && !state->backend_probe) {
-        size_t header = sizeof(spdm_chunk_send_request_t) + (sequence == 0 ? 4 : 0);
-        size_t payload = libspdm_read_uint32(bytes + 8);
-        if (!state->certificate_target_valid || sequence != state->send_count - 1 ||
-            size < header || payload != size - header ||
-            state->certificate_sent > state->certificate_request_size ||
-            payload > state->certificate_request_size - state->certificate_sent ||
-            (sequence == 0 && (libspdm_read_uint32(bytes + 12) !=
-              state->certificate_request_size || payload < 4 ||
-              bytes[17] != SPDM_SET_CERTIFICATE)) ||
-            state->last_send_final !=
-              (payload == state->certificate_request_size - state->certificate_sent)) {
-          state->invalid = true;
-          return LIBSPDM_STATUS_SEND_FAIL;
-        }
-        candidate = state->certificate_target >= state->certificate_sent &&
-          state->certificate_target - state->certificate_sent < payload;
-        if (candidate) {
-          target_in_chunk = header + state->certificate_target - state->certificate_sent;
-          if (bytes[target_in_chunk] != state->certificate_original) {
-            state->invalid = true;
-            return LIBSPDM_STATUS_SEND_FAIL;
-          }
-        }
-        state->certificate_sent += payload;
-      }
-    } else if (state->abandon && bytes[1] == SPDM_CHUNK_GET &&
-               size >= sizeof(spdm_chunk_get_request_t)) {
-      /* A validated non-final CHUNK_RESPONSE, not an absolute occurrence,
-       * proves an actual partial GET_CERTIFICATE transfer is active. */
-      candidate = state->partial_response && bytes[3] == state->handle &&
-          chunk_sequence(bytes) == state->next_get_sequence;
-    }
+    candidate = select_chunk_fault(state, message, size, &sequence, &target_in_chunk);
+    if (candidate < 0) return LIBSPDM_STATUS_SEND_FAIL;
   }
-
   if (candidate && !state->selected) {
-    if (signature_flip) {
-      /* Candidate-slice FI framing: real CHUNK_SEND selector plus exactly the
-       * DER-selected byte. offset=12 addresses this slice, NOT a wire offset.
-       * FI owns the XOR and audit; copy back only its one verified changed bit. */
-      uint8_t slice[13] = {0};
-      slice[2] = TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM;
-      libspdm_write_uint32(slice + 4, 4);
-      memcpy(slice + 8, bytes, 4);
-      slice[12] = bytes[target_in_chunk];
-      result = teeio_fault_apply(slice, sizeof(slice), sizeof(slice));
-      if (size + 8 > TEEIO_FAULT_MAX_MESSAGE_SIZE ||
-          result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE ||
-          result.message_size != sizeof(slice) ||
-          memcmp(result.message, slice, 12) != 0 ||
-          (result.message[12] ^ slice[12]) != 1 || teeio_fault_fire_count() != 1) {
-        state->invalid = true;
-        return LIBSPDM_STATUS_SEND_FAIL;
-      }
-      memcpy(state->frame + 8, message, size);
-      state->frame[8 + target_in_chunk] = result.message[12];
-      state->selected = true;
-      TEEIO_DEBUG((TEEIO_DEBUG_INFO,
-        "Certificate signature target: non-root cert index=1 ECDSA r LSB request_offset=%zu chunk=%u wire_offset=%zu bits=1\n",
-        state->certificate_target, sequence, target_in_chunk + 8));
-      return libspdm_transport_pci_doe_encode_message(spdm, session_id, app,
-        request, size, state->frame + 8, transport_size, transport);
+    if (!state->abandon && !state->missing && !state->oversized) {
+      return encode_corrupted_signature(state, spdm, session_id, app, request,
+        size, message, transport_size, transport, sequence, target_in_chunk);
     }
-    if (size + 8 + 4 > TEEIO_FAULT_MAX_MESSAGE_SIZE) {
-      state->invalid = true;
+    if (!apply_chunk_fault(state, spdm, sequence, &size, &message)) {
       return LIBSPDM_STATUS_SEND_FAIL;
-    }
-    memset(state->frame, 0, 8);
-    state->frame[2] = TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM;
-    libspdm_write_uint32(state->frame + 4, (uint32_t)((size + 11) / 4));
-    memcpy(state->frame + 8, message, size);
-    result = teeio_fault_apply(state->frame, size + 8,
-                               TEEIO_FAULT_MAX_MESSAGE_SIZE - 3);
-    if (result.disposition != TEEIO_FAULT_DISPOSITION_PASS) {
-      state->selected = true;
-      if (state->abandon || state->missing) {
-        if (result.disposition != (state->abandon ?
-              TEEIO_FAULT_DISPOSITION_ABANDON : TEEIO_FAULT_DISPOSITION_DROP)) {
-          state->invalid = true;
-        }
-        teeio_fault_record_actual(state->abandon ?
-          "chunk_transfer_abandoned" : "final_chunk_withheld");
-        /* Fail the send locally: no hardware transmission or receive timeout,
-         * and no attempt to send a non-chunk request before GET_VERSION. */
-        return LIBSPDM_STATUS_SEND_FAIL;
-      }
-      if (result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE ||
-          result.message_size < 8 ||
-          result.message_size > TEEIO_FAULT_MAX_MESSAGE_SIZE - 3) {
-        state->invalid = true;
-        return LIBSPDM_STATUS_SEND_FAIL;
-      }
-      if (state->oversized &&
-          (sequence != 0 || size != state->data_transfer_size ||
-           result.message_size != size + 16 ||
-           result.message_size - 8 <= state->data_transfer_size ||
-           memcmp(result.message + 8, message, size) != 0)) {
-        /* Fail closed if the configured mutation does not exceed the peer's
-         * actual receive limit (the local limit may be smaller). */
-        state->invalid = true;
-        return LIBSPDM_STATUS_SEND_FAIL;
-      }
-      if (!state->oversized) {
-        size_t index;
-        size_t changed_bits = 0;
-        /* Config validation at the point of application: this must be one
-         * certificate-payload bit, never a chunk header or resized message. */
-        if (sequence == 0 || result.message_size != size + 8 ||
-            memcmp(result.message + 8, message,
-                   sizeof(spdm_chunk_send_request_t)) != 0) {
-          state->invalid = true;
-          return LIBSPDM_STATUS_SEND_FAIL;
-        }
-        for (index = sizeof(spdm_chunk_send_request_t); index < size; index++) {
-          uint8_t difference = result.message[8 + index] ^ bytes[index];
-          while (difference != 0) {
-            changed_bits += difference & 1;
-            difference >>= 1;
-          }
-        }
-        if (changed_bits != 1) {
-          state->invalid = true;
-          return LIBSPDM_STATUS_SEND_FAIL;
-        }
-      }
-      memcpy(state->frame, result.message, result.message_size);
-      message = state->frame + 8;
-      size = result.message_size - 8;
     }
   }
   if (state->armed && state->oversized && state->selected) {
@@ -347,6 +384,17 @@ static libspdm_return_t chunk_encode(
   }
   status = libspdm_transport_pci_doe_encode_message(
     spdm, session_id, app, request, size, message, transport_size, transport);
+  if (state->armed && state->oversized && state->selected &&
+      !LIBSPDM_STATUS_IS_ERROR(status) &&
+      size > state->data_transfer_size) {
+    TEEIO_DEBUG((TEEIO_DEBUG_WARN,
+      "Oversized chunk encode: plain=%zu transport=%zu doe_dw=%u doe_type=%u session=%u app=%u limit=%u chunk_size=%u\n",
+      size, *transport_size,
+      libspdm_read_uint32((const uint8_t *)*transport + 4) & 0x3ffff,
+      ((const uint8_t *)*transport)[2], session_id != NULL, app,
+      state->data_transfer_size,
+      ((const spdm_chunk_send_request_t *)message)->chunk_size));
+  }
   if (state->armed && state->oversized && state->selected &&
       !LIBSPDM_STATUS_IS_ERROR(status) &&
       (*transport_size < size + 8 ||
@@ -416,6 +464,13 @@ static libspdm_return_t chunk_decode(
       bytes[header_size + 2] == SPDM_ERROR_CODE_INVALID_REQUEST &&
       bytes[header_size + 3] == 0) {
     state->first_early_invalid_request = true;
+  }
+  if (state->oversized && state->selected && state->ack_count == 1 &&
+      !state->first_early_invalid_request) {
+    teeio_fault_record_actual("first_chunk_not_early_invalid_request");
+    TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+      "Oversized chunk: first ACK is not early InvalidRequest; stopping before further chunks\n"));
+    return LIBSPDM_STATUS_ERROR_PEER;
   }
   /* DOE exposes up to three zero alignment bytes (notably 1.2's six-byte ACK). */
   terminal_error_size = *size >= header_size + sizeof(spdm_error_response_t) &&

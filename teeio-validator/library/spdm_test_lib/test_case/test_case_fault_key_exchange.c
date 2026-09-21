@@ -6,6 +6,13 @@
 #include "spdm_test_lib.h"
 #include "internal/libspdm_common_lib.h"
 
+#define KEX_SET(type, value) \
+  do { \
+    if (!kex_set(spdm, type, &(value), sizeof(value))) { \
+      return false; \
+    } \
+  } while (0)
+
 /* Fault drivers for duplicate KEY_EXCHANGE and the cached-certificate control.
  * No protocol requirement to reject a repeated requester half is assumed.
  * This driver requires two successful RSPs with distinct composed IDs, then
@@ -266,7 +273,6 @@ bool spdm_test_case_fault_key_exchange_setup(void *test_context)
   if (!teeio_spdm_apply_version_override(spdm)) {
     return false;
   }
-#define KEX_SET(type, value) do { if (!kex_set(spdm, type, &(value), sizeof(value))) return false; } while (0)
   n8 = 0; KEX_SET(LIBSPDM_DATA_CAPABILITY_CT_EXPONENT, n8);
   n32 = SPDM_GET_CAPABILITIES_REQUEST_FLAGS_CERT_CAP |
     SPDM_GET_CAPABILITIES_REQUEST_FLAGS_ENCRYPT_CAP |
@@ -285,7 +291,6 @@ bool spdm_test_case_fault_key_exchange_setup(void *test_context)
   n16 = SPDM_ALGORITHMS_AEAD_CIPHER_SUITE_AES_256_GCM; KEX_SET(LIBSPDM_DATA_AEAD_CIPHER_SUITE, n16);
   n16 = SPDM_ALGORITHMS_KEY_SCHEDULE_SPDM; KEX_SET(LIBSPDM_DATA_KEY_SCHEDULE, n16);
   n8 = SPDM_ALGORITHMS_OPAQUE_DATA_FORMAT_1; KEX_SET(LIBSPDM_DATA_OTHER_PARAMS_SUPPORT, n8);
-#undef KEX_SET
   s->chain_size = LIBSPDM_MAX_CERT_CHAIN_SIZE;
   if (libspdm_init_connection(spdm, false) != LIBSPDM_STATUS_SUCCESS ||
       libspdm_get_certificate_ex(spdm, NULL, 0, 0, &s->chain_size, s->chain,

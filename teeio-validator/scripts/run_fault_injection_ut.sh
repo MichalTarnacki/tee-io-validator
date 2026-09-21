@@ -139,15 +139,28 @@ cflags=("${spdm_flags[@]}" -I"${validator_dir}/library/helperlib/include"
     -DHOST_SAMPLE_KEY_DIR="\"${sample_key_dir}\"")
 compile_c "${chunk}" \
     "${test_dir}/host_chunk_fault/chunk_fault_test.c" \
+    "${test_dir}/host_chunk_fault/doe_send_test.c" \
+    "${test_dir}/host_chunk_fault/pci_io_test.c" \
     "${validator_dir}/library/helperlib/fault_injection.c" \
+    "${validator_dir}/library/spdmlib/pci_doe.c" \
     "${libspdm_dir}/library/spdm_responder_lib/libspdm_rsp_chunk_send_ack.c" \
-    "${libspdm_dir}/library/spdm_responder_lib/libspdm_rsp_error.c"
-compile_gtest "${test_dir}/host_chunk_fault/chunk_fault_gtest.cpp" "${chunk}/chunk_fault_gtest.o"
+    "${libspdm_dir}/library/spdm_responder_lib/libspdm_rsp_error.c" \
+    "${libspdm_dir}/library/spdm_requester_lib/libspdm_req_send_receive.c" \
+    "${libspdm_dir}/library/spdm_requester_lib/libspdm_req_handle_error_response.c"
+for suite in chunk_fault doe_send pci_io; do
+    compile_gtest "${test_dir}/host_chunk_fault/${suite}_gtest.cpp" "${chunk}/${suite}_gtest.o"
+done
+shared=("${chunk}/fault_injection.o" "${chunk}/libspdm_rsp_chunk_send_ack.o"
+    "${chunk}/libspdm_rsp_error.o" "${build_dir}/host_check.o")
 link_gtest "${chunk}/chunk_fault_gtest" -Wl,--gc-sections \
-    "${chunk}/chunk_fault_gtest.o" "${chunk}/chunk_fault_test.o" \
-    "${chunk}/fault_injection.o" "${chunk}/libspdm_rsp_chunk_send_ack.o" \
-    "${chunk}/libspdm_rsp_error.o" "${build_dir}/host_check.o" \
+    "${chunk}/chunk_fault_gtest.o" "${chunk}/chunk_fault_test.o" "${shared[@]}" \
     -Wl,--start-group "${libs[@]}" "${crypto}" -Wl,--end-group -ldl
+link_gtest "${chunk}/doe_send_gtest" -Wl,--gc-sections \
+    "${chunk}/doe_send_gtest.o" "${chunk}/doe_send_test.o" "${chunk}/pci_doe.o" \
+    "${chunk}/libspdm_req_send_receive.o" "${chunk}/libspdm_req_handle_error_response.o" \
+    "${shared[@]}" -Wl,--start-group "${libs[@]}" "${crypto}" -Wl,--end-group -ldl
+link_gtest "${chunk}/pci_io_gtest" -Wl,--gc-sections \
+    "${chunk}/pci_io_gtest.o" "${chunk}/pci_io_test.o" "${build_dir}/host_check.o"
 
 # Key exchange: every libspdm library compiled from source with debug asserts.
 kex="${build_dir}/key_exchange"
@@ -203,7 +216,7 @@ done
 # Validator runs write their logs to the working directory.
 mkdir -p "${build_dir}/run"
 cd "${build_dir}/run"
-for test in fault_injection_test chunk/chunk_fault_gtest key_exchange_gtest \
-    integration_gtest; do
+for test in fault_injection_test chunk/chunk_fault_gtest chunk/doe_send_gtest \
+    chunk/pci_io_gtest key_exchange_gtest integration_gtest; do
     timeout 900 "${build_dir}/${test}"
 done

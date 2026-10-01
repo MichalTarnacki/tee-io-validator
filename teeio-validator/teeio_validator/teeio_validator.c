@@ -12,6 +12,7 @@
 #include "os_include.h"
 #include "command.h"
 #include "teeio_spdmlib.h"
+#include "spdm_test.h"
 
 char g_bdf[] = {'2','a',':','0','0','.','0','\0'};
 char g_rp_bdf[] = {'2','9',':','0','2','.','0','\0'};
@@ -51,7 +52,7 @@ extern const char *IDE_TEST_IDE_TYPE_NAMES[];
 bool parse_ide_test_init(IDE_TEST_CONFIG *test_config, const char* ide_test_ini);
 bool parse_cmdline_option(int argc, char *argv[], char* file_name, IDE_TEST_CONFIG *ide_test_config, bool* print_usage, uint8_t* debug_level);
 void print_usage();
-bool run(IDE_TEST_CONFIG *test_config);
+bool run(IDE_TEST_CONFIG *test_config, bool *control_passed);
 bool update_test_config_with_given_top_config_id(IDE_TEST_CONFIG *test_config, int top_id, int config_id, const char* test_case, TEEIO_TEST_CATEGORY test_category);
 bool is_valid_test_case(const char* test_case_name, TEEIO_TEST_CATEGORY test_category);
 
@@ -68,6 +69,29 @@ static TEEIO_TEST_CATEGORY get_test_category_from_configuration(IDE_TEST_CONFIG*
   return TEEIO_TEST_CATEGORY_MAX;
 }
 
+/* Fault rules are global, so one run can drive at most one Fault case. */
+static bool select_fault_case(IDE_TEST_CONFIG *test_config)
+{
+  uint32_t selected = 0;
+
+  for (int i = 0; i < MAX_TEST_SUITE_NUM; i++) {
+    IDE_TEST_SUITE *suite = test_config->test_suites.test_suites + i;
+    IDE_TEST_CASE *cases = suite->test_cases.cases + SPDM_TEST_CASE_FAULT;
+
+    if (suite->id == 0 || !suite->enabled ||
+        suite->test_category != TEEIO_TEST_CATEGORY_SPDM) {
+      continue;
+    }
+    for (uint32_t j = 0; j < cases->cases_cnt; j++) {
+      if (selected != 0 && selected != cases->cases_id[j]) {
+        return false;
+      }
+      selected = cases->cases_id[j];
+    }
+  }
+  return selected == 0 || teeio_fault_select_driver(selected);
+}
+
 int main(int argc, char *argv[])
 {
     char ide_test_ini_file[MAX_FILE_NAME] = {0};
@@ -75,6 +99,9 @@ int main(int argc, char *argv[])
     bool to_print_usage = false;
     int ret = -1;
     uint8_t debug_level = TEEIO_DEBUG_NUM;
+    bool control_passed = false;
+    bool drivers_passed;
+    bool zero_fire_control_passed;
 
     if (!log_file_init(LOGFILE)){
         TEEIO_PRINT(("Failed to init log file!\n"));
@@ -155,6 +182,11 @@ int main(int argc, char *argv[])
       }
     }
 
+    if (!select_fault_case(&ide_test_config)) {
+      TEEIO_DEBUG((TEEIO_DEBUG_ERROR, "Only one SPDM Fault case can run per invocation.\n"));
+      goto MainDone;
+    }
+
     // Open pcap file
     if (ide_test_config.main_config.pcap_enable) {
        if (!pcap_file_init(PCAPFILE, SOCKET_TRANSPORT_TYPE_PCI_DOE)) {
@@ -165,18 +197,27 @@ int main(int argc, char *argv[])
 
     srand((unsigned int)time(NULL));
 
-    run(&ide_test_config);
+    drivers_passed = run(&ide_test_config, &control_passed);
+    /* A passing cached-certificate control legitimately fires no rule. */
+    zero_fire_control_passed = ide_test_config.fault_injection.rule_count == 1 &&
+        teeio_fault_driver() == TEEIO_FAULT_DRIVER_KEY_EXCHANGE_CACHED_CERT &&
+        teeio_fault_fire_count() == 0 && control_passed;
 
         if (ide_test_config.fault_injection.rule_count > 0) {
             TEEIO_PRINT(("Fault scenario result: %s\n",
                                      teeio_fault_result_record()));
         }
-        if (ide_test_config.fault_injection.rule_count > 0 &&
-                !teeio_fault_scenario_fired()) {
+        if (!drivers_passed) {
+            TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+                 "Dedicated fault driver assertions failed or did not run.\n"));
+            ret = -1;
+        } else if (ide_test_config.fault_injection.rule_count > 0 &&
+            !teeio_fault_scenario_fired() && !zero_fire_control_passed) {
             TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
                                      "Fault scenario never fired.\n"));
             ret = -1;
-        } else if (!teeio_fault_all_rules_fired(unfired_rules,
+        } else if (!zero_fire_control_passed &&
+                   !teeio_fault_all_rules_fired(unfired_rules,
                                                 sizeof(unfired_rules))) {
             TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
                          "Fault rules never fired: %s\n", unfired_rules));

@@ -41,6 +41,7 @@ static bool m_same_session_recovery_checked;
 static bool m_same_session_recovery_passed;
 static bool m_same_session_preflight;
 static bool m_fault_suspended;
+static teeio_fault_driver_t m_driver;
 
 static void set_error(char *error, size_t error_size, const char *format, ...)
 {
@@ -269,6 +270,7 @@ void teeio_fault_reset(void)
 void teeio_fault_init(IDE_TEST_FAULT_CONFIG *config)
 {
     m_config = config;
+    m_driver = TEEIO_FAULT_DRIVER_NONE;
     teeio_fault_reset();
 }
 
@@ -290,6 +292,20 @@ bool teeio_fault_scenario_is(const char *scenario)
         }
     }
     return false;
+}
+
+bool teeio_fault_select_driver(uint32_t case_id)
+{
+    if (case_id == TEEIO_FAULT_DRIVER_NONE || case_id > TEEIO_FAULT_DRIVER_MAX) {
+        return false;
+    }
+    m_driver = (teeio_fault_driver_t)case_id;
+    return true;
+}
+
+teeio_fault_driver_t teeio_fault_driver(void)
+{
+    return m_driver;
 }
 
 static uint32_t read_u32(const uint8_t *data)

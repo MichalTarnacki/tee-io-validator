@@ -637,7 +637,7 @@ TEST(FaultInjectionSequenceTest, ReorderRuleDoesNotTakeAnotherRulesHold)
     EXPECT_EQ(result.message[12], 0x53);
 }
 
-TEST(FaultInjectionRuleTest, RejectsWireActionsOnPlaintext)
+TEST(FaultInjectionRuleTest, RejectsWireActionsOnPlaintextWithoutDriver)
 {
     IDE_TEST_FAULT_CONFIG config;
     teeio_fault_rule_t *rule = InitRule(&config, TEEIO_FAULT_ACTION_DROP);
@@ -647,7 +647,8 @@ TEST(FaultInjectionRuleTest, RejectsWireActionsOnPlaintext)
                                             TEEIO_FAULT_DOE_TYPE_PLAIN_SECURED_SPDM,
                                             TEEIO_FAULT_MATCH_ANY};
 
-    EXPECT_TRUE(teeio_fault_validate_rule(rule, error, sizeof(error)));
+    teeio_fault_init(&config);
+    EXPECT_TRUE(teeio_fault_validate_plaintext_rules(error, sizeof(error)));
     for (uint32_t doe_type : plaintext_doe_types) {
         rule->doe_type = doe_type;
         for (teeio_fault_action_t action : {TEEIO_FAULT_ACTION_DROP,
@@ -656,8 +657,11 @@ TEST(FaultInjectionRuleTest, RejectsWireActionsOnPlaintext)
                                             TEEIO_FAULT_ACTION_ABANDON,
                                             TEEIO_FAULT_ACTION_SET_DECLARED_LENGTH}) {
             rule->action = action;
-            EXPECT_FALSE(teeio_fault_validate_rule(rule, error, sizeof(error)));
+            teeio_fault_init(&config);
+            EXPECT_FALSE(teeio_fault_validate_plaintext_rules(error, sizeof(error)));
             EXPECT_NE(std::strstr(error, "needs a wire doe_type"), nullptr);
+            ASSERT_TRUE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_CHUNK_ABANDON));
+            EXPECT_TRUE(teeio_fault_validate_plaintext_rules(error, sizeof(error)));
         }
     }
     rule->doe_type = TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM;
@@ -665,6 +669,8 @@ TEST(FaultInjectionRuleTest, RejectsWireActionsOnPlaintext)
     rule->pattern[0] = 1;
     rule->pattern_size = 1;
     EXPECT_TRUE(teeio_fault_validate_rule(rule, error, sizeof(error)));
+    teeio_fault_init(&config);
+    EXPECT_TRUE(teeio_fault_validate_plaintext_rules(error, sizeof(error)));
 }
 
 TEST(FaultInjectionStateTest, ConnectionResetKeepsRunAccounting)
@@ -752,6 +758,26 @@ TEST(FaultInjectionClassificationTest, EnforcesAllowedActual)
     teeio_fault_apply(message, sizeof(message), sizeof(message));
     teeio_fault_record_actual("controlled");
     EXPECT_FALSE(teeio_fault_actual_allowed());
+}
+
+TEST(FaultInjectionDriverTest, ValidatesAndKeepsSelectedDriver)
+{
+    IDE_TEST_FAULT_CONFIG config;
+    InitRule(&config, TEEIO_FAULT_ACTION_DROP);
+
+    teeio_fault_init(&config);
+    EXPECT_FALSE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_NONE));
+    EXPECT_FALSE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_MAX + 1));
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_NONE);
+
+    EXPECT_TRUE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_MAX));
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_MAX);
+    teeio_fault_reset();
+    teeio_fault_reset_connection();
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_MAX);
+
+    teeio_fault_init(&config);
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_NONE);
 }
 
 }  // namespace

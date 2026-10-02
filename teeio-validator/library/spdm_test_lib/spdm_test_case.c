@@ -7,8 +7,10 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <stdio.h>
 #include "helperlib.h"
 #include "ide_test.h"
+#include "teeio_fault_injection.h"
 #include "spdm_test_common.h"
 #include "library/common_test_utility_lib.h"
 #include "library/spdm_responder_conformance_test_lib.h"
@@ -64,6 +66,7 @@ ide_test_case_name_t m_spdm_test_case_names[] = {
   {"HeartbeatAck",      NULL,    SPDM_TEST_CASE_HEARTBEAT_ACK    },
   {"KeyUpdateAck",      NULL,    SPDM_TEST_CASE_KEY_UPDATE_ACK   },
   {"EndSessionAck",     NULL,    SPDM_TEST_CASE_END_SESSION_ACK  },
+  {"Fault",             NULL,    SPDM_TEST_CASE_FAULT            },
   {NULL,                NULL,    SPDM_TEST_CASE_NUM              }
 };
 
@@ -162,6 +165,23 @@ void spdm_test_lib_init_test_cases()
     }
   }
 
+  /* Fault.N runs driver N (teeio_fault_driver_t). */
+  m_spdm_test_case_funcs[SPDM_TEST_CASE_FAULT].funcs = (ide_test_case_funcs_t *)
+    calloc(TEEIO_FAULT_DRIVER_MAX, sizeof(ide_test_case_funcs_t));
+  TEEIO_ASSERT(m_spdm_test_case_funcs[SPDM_TEST_CASE_FAULT].funcs != NULL);
+  m_spdm_test_case_funcs[SPDM_TEST_CASE_FAULT].cnt = TEEIO_FAULT_DRIVER_MAX;
+  m_spdm_test_case_names[SPDM_TEST_CASE_FAULT].names =
+    calloc(TEEIO_FAULT_DRIVER_MAX, 4);
+  TEEIO_ASSERT(m_spdm_test_case_names[SPDM_TEST_CASE_FAULT].names != NULL);
+  for (int i = 0; i < TEEIO_FAULT_DRIVER_MAX; i++) {
+    ide_test_case_funcs_t *funcs = m_spdm_test_case_funcs[SPDM_TEST_CASE_FAULT].funcs + i;
+    char *names = m_spdm_test_case_names[SPDM_TEST_CASE_FAULT].names;
+
+    funcs->setup = spdm_test_case_fault_setup;
+    funcs->run = spdm_test_case_fault_run;
+    funcs->teardown = spdm_test_case_fault_teardown;
+    sprintf(names + strlen(names), i == 0 ? "%d" : ",%d", i + 1);
+  }
 }
 
 void spdm_test_lib_clean(void)

@@ -107,6 +107,24 @@ TEST(FaultInjectionStateTest, EnabledRequiresConfiguredRule)
     EXPECT_FALSE(teeio_fault_scenario_is("other_case"));
 }
 
+TEST(FaultInjectionStateTest, SelectsDriverByCaseId)
+{
+    IDE_TEST_FAULT_CONFIG config;
+
+    InitRule(&config, TEEIO_FAULT_ACTION_DROP);
+    teeio_fault_init(&config);
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_NONE);
+
+    EXPECT_TRUE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_FINISH_SIGNATURE));
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_FINISH_SIGNATURE);
+    EXPECT_FALSE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_NONE));
+    EXPECT_FALSE(teeio_fault_select_driver(TEEIO_FAULT_DRIVER_MAX + 1));
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_FINISH_SIGNATURE);
+
+    teeio_fault_init(&config);
+    EXPECT_EQ(teeio_fault_driver(), TEEIO_FAULT_DRIVER_NONE);
+}
+
 TEST(FaultInjectionSelectorTest, MatchesSelectorsAndOccurrence)
 {
     IDE_TEST_FAULT_CONFIG config;

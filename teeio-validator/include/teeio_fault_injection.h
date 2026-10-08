@@ -81,6 +81,19 @@ typedef struct {
     teeio_fault_rule_t rules[TEEIO_FAULT_MAX_RULES];
 } IDE_TEST_FAULT_CONFIG;
 
+/* SPDM Fault.N drivers; the value is the case ID N. */
+typedef enum {
+    TEEIO_FAULT_DRIVER_NONE = 0,
+    TEEIO_FAULT_DRIVER_CERT_SIGNATURE_CHUNK,
+    TEEIO_FAULT_DRIVER_CHUNK_OVERSIZED,
+    TEEIO_FAULT_DRIVER_CHUNK_ABANDON,
+    TEEIO_FAULT_DRIVER_CHUNK_LAST_WITHHELD,
+    TEEIO_FAULT_DRIVER_KEY_EXCHANGE_DUPLICATE,
+    TEEIO_FAULT_DRIVER_KEY_EXCHANGE_CACHED_CERT,
+    TEEIO_FAULT_DRIVER_FINISH_SIGNATURE,
+    TEEIO_FAULT_DRIVER_MAX = TEEIO_FAULT_DRIVER_FINISH_SIGNATURE
+} teeio_fault_driver_t;
+
 typedef struct {
     teeio_fault_disposition_t disposition;
     /* Message pointers remain valid until the next teeio_fault_apply call. */
@@ -107,6 +120,8 @@ void teeio_fault_init(IDE_TEST_FAULT_CONFIG *config);
 void teeio_fault_reset(void);
 bool teeio_fault_is_enabled(void);
 bool teeio_fault_scenario_is(const char *scenario);
+bool teeio_fault_select_driver(uint32_t case_id);
+teeio_fault_driver_t teeio_fault_driver(void);
 
 teeio_fault_result_t teeio_fault_apply(const void *message,
                                        size_t message_size,

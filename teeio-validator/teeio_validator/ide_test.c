@@ -1256,10 +1256,68 @@ bool clean_tests_data(ide_run_test_suite_t* test_suite)
 /**
  * Run tests based on test_config
 */
-bool run(IDE_TEST_CONFIG *test_config)
+static bool fault_driver_results_passed(ide_run_test_suite_t *suites,
+                                       bool *control_passed)
+{
+  unsigned int executed = 0;
+  bool passed = suites != NULL;
+  bool control =
+    teeio_fault_driver() == TEEIO_FAULT_DRIVER_KEY_EXCHANGE_CACHED_CERT;
+  bool dedicated = teeio_fault_driver() != TEEIO_FAULT_DRIVER_NONE;
+
+  *control_passed = false;
+  for (; suites != NULL; suites = suites->next) {
+    ide_common_test_suite_context_t *suite = suites->test_context;
+    ide_run_test_config_result_t *config;
+    if (suite == NULL || suite->test_category != TEEIO_TEST_CATEGORY_SPDM) {
+      continue;
+    }
+    for (config = suite->result; config != NULL; config = config->next) {
+      ide_run_test_group_result_t *group;
+      for (group = config->group_result; group != NULL; group = group->next) {
+        ide_run_test_case_result_t *test;
+        for (test = group->case_result; test != NULL; test = test->next) {
+          ide_run_test_case_assertion_result_t *assertion;
+          bool primary_passed = false;
+          if (test->class_id != SPDM_TEST_CASE_FAULT ||
+              test->case_id != (int)teeio_fault_driver()) {
+            continue;
+          }
+          executed++;
+          passed &= test->total_passed > 0 && test->total_failed == 0 &&
+            group->func_results[TEEIO_TEST_GROUP_FUNC_SETUP].result == TEEIO_TEST_RESULT_PASS &&
+            group->func_results[TEEIO_TEST_GROUP_FUNC_TEARDOWN].result == TEEIO_TEST_RESULT_PASS;
+          /* Use the saved per-case records, NOT g_current_case_result (which
+           * is cleared after execution). Include teardown/recovery failures.
+           * A skipped case or only ancillary assertions is not a driver pass. */
+          for (assertion = test->assertion_result; assertion != NULL;
+               assertion = assertion->next) {
+            if (assertion->type != IDE_COMMON_TEST_CASE_ASSERTION_TYPE_TEST) {
+              continue;
+            }
+            passed &= assertion->class_id == SPDM_TEST_CASE_FAULT &&
+              assertion->case_id == test->case_id &&
+              assertion->result == TEEIO_TEST_RESULT_PASS;
+            primary_passed |= assertion->assertion_id == 1 &&
+              assertion->result == TEEIO_TEST_RESULT_PASS;
+          }
+          passed &= primary_passed;
+        }
+      }
+    }
+  }
+  passed &= !dedicated || executed > 0;
+  *control_passed = control && passed && executed == 1;
+  return passed;
+}
+
+bool run(IDE_TEST_CONFIG *test_config, bool *control_passed)
 {
   ide_run_test_suite_t *run_test_suite = prepare_tests_data(test_config);
   ide_run_test_suite_t *itr = run_test_suite;
+  bool passed;
+
+  *control_passed = false;
 
   while(itr != NULL) {
     do_run_test_suite(itr);
@@ -1269,7 +1327,8 @@ bool run(IDE_TEST_CONFIG *test_config)
   print_test_results(run_test_suite, true);
   print_test_results(run_test_suite, false);
 
+  passed = fault_driver_results_passed(run_test_suite, control_passed);
   clean_tests_data(run_test_suite);
 
-  return true;
+  return passed;
 }

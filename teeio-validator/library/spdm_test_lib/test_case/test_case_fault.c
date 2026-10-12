@@ -626,6 +626,11 @@ bool spdm_test_case_fault_setup(void *test_context)
       !teeio_spdm_apply_version_override(context->spdm_context)) {
     return false;
   }
+  if (teeio_spdm_pqc_profile() && teeio_fault_driver() != TEEIO_FAULT_DRIVER_CHUNK_ABANDON) {
+    TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+      "SET_CERTIFICATE chunk drivers support only the classical profile (ML-DSA chain exceeds MaxSPDMmsgSize)\n"));
+    return false;
+  }
 
   data8 = 0;
   if (!set_local_data(context->spdm_context,
@@ -690,12 +695,14 @@ bool spdm_test_case_fault_setup(void *test_context)
   }
   data8 = SPDM_ALGORITHMS_OPAQUE_DATA_FORMAT_1;
   if (!set_local_data(context->spdm_context, LIBSPDM_DATA_OTHER_PARAMS_SUPPORT,
-                      &data8, sizeof(data8))) {
+                      &data8, sizeof(data8)) ||
+      !teeio_spdm_apply_algorithm_profile(context->spdm_context)) {
     return false;
   }
 
   status = libspdm_init_connection(context->spdm_context, false);
-  if (LIBSPDM_STATUS_IS_ERROR(status)) {
+  if (LIBSPDM_STATUS_IS_ERROR(status) ||
+      !teeio_spdm_negotiated_profile_matches(context->spdm_context)) {
     return false;
   }
   teeio_spdm_log_negotiated_version(context->spdm_context);

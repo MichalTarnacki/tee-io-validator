@@ -168,6 +168,8 @@ int main(int argc, char *argv[])
     g_libspdm_log = ide_test_config.main_config.libspdm_log;
     g_doe_log = ide_test_config.main_config.doe_log;
     teeio_spdm_set_version(ide_test_config.main_config.spdm_version);
+    teeio_spdm_set_pqc_profile(ide_test_config.main_config.algorithm_profile ==
+                               TEEIO_SPDM_ALGORITHM_PROFILE_PQC);
     teeio_fault_init(&ide_test_config.fault_injection);
 
     if(debug_level == TEEIO_DEBUG_NUM) {

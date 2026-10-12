@@ -325,6 +325,11 @@ bool spdm_test_case_fault_mut_auth_setup(void *test_context)
       !teeio_spdm_apply_version_override(context->spdm_context)) {
     return false;
   }
+  if (teeio_spdm_pqc_profile()) {
+    TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+      "FINISH-signature driver supports only the classical profile (ECDSA P-384 requester)\n"));
+    return false;
+  }
   data8 = 0;
   FINISH_SIG_SET(LIBSPDM_DATA_CAPABILITY_CT_EXPONENT, data8);
   /* Basic mutual auth: CERT_CAP + MUT_AUTH_CAP; no ENCAP or PUB_KEY_ID. */

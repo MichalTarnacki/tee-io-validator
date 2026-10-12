@@ -168,7 +168,8 @@ void *spdm_init_client(void)
   }
   libspdm_set_scratch_buffer (spdm_context, scratch_buffer, scratch_buffer_size);
 
-  if (!teeio_spdm_apply_version_override(spdm_context)) {
+  if (!teeio_spdm_apply_version_override(spdm_context) ||
+      !teeio_spdm_apply_algorithm_profile(spdm_context)) {
     free(scratch_buffer);
     free(spdm_context);
     return NULL;

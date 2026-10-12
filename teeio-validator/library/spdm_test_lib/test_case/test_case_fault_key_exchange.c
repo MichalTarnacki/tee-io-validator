@@ -246,6 +246,11 @@ bool spdm_test_case_fault_key_exchange_setup(void *test_context)
       teeio_fault_fire_count() != 0 || teeio_fault_same_session_recovery_configured()) {
     return false;
   }
+  if (teeio_spdm_pqc_profile()) {
+    TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+      "KEY_EXCHANGE drivers support only the classical profile (cached ML-DSA chain restore unsupported)\n"));
+    return false;
+  }
   spdm = test->spdm_context;
   s = (void *)test->test_scratch_buffer;
   libspdm_zero_mem(s, sizeof(*s));

@@ -52,6 +52,7 @@ static uint8_t m_fault_deferred_send[TEEIO_FAULT_MAX_MESSAGE_SIZE];
 static size_t m_fault_deferred_send_size;
 static bool m_fault_sending_deferred;
 static uint8_t m_fault_plain_send[TEEIO_FAULT_MAX_MESSAGE_SIZE];
+static uint8_t m_fault_large_send[TEEIO_FAULT_MAX_MESSAGE_SIZE];
 static uint8_t m_fault_duplicate_response[TEEIO_FAULT_MAX_MESSAGE_SIZE];
 static bool m_fault_draining_duplicate;
 static void *m_fault_secured_message_context;
@@ -173,11 +174,131 @@ static bool apply_plain_send_fault(bool secured, void **message,
     return true;
 }
 
+/* A request too large for one DOE object (e.g. ML-KEM KEY_EXCHANGE) reaches the
+ * transport only as CHUNK_SEND. Match rules once against its whole message at
+ * the first chunk; only in-place set/xor mutations can be carried by chunks. */
+static bool apply_chunked_request_fault(void *spdm_context, uint8_t *message,
+                                        size_t message_size)
+{
+    libspdm_chunk_info_t *send = &((libspdm_context_t *)spdm_context)->chunk_context.send;
+    const uint8_t doe_types[] = {PCI_DOE_DATA_OBJECT_TYPE_SPDM,
+                                 TEEIO_FAULT_DOE_TYPE_PLAIN_SPDM};
+    size_t header = sizeof(spdm_chunk_send_request_t) + sizeof(uint32_t);
+    size_t framed_size;
+    size_t payload;
+    size_t index;
+    teeio_fault_result_t result;
+
+    if (message_size < header || message[1] != SPDM_CHUNK_SEND ||
+        (message[0] >= SPDM_MESSAGE_VERSION_14 ? libspdm_read_uint32(message + 4) :
+                                                 libspdm_read_uint16(message + 4)) != 0 ||
+        !send->chunk_in_use || send->large_message == NULL ||
+        send->large_message_size < sizeof(spdm_message_header_t)) {
+        return true;
+    }
+    /* Pad like a real DOE object so SPDM-typed rules pass the DWORD check. */
+    framed_size = sizeof(pci_doe_data_object_header_t) +
+                  ((send->large_message_size + 3) & ~(size_t)3);
+    payload = libspdm_read_uint32(message + 8);
+    if (framed_size > sizeof(m_fault_large_send) || payload > message_size - header ||
+        payload > send->large_message_size) {
+        return true;
+    }
+    for (index = 0; index < sizeof(doe_types); index++) {
+        set_fault_plain_header(m_fault_large_send, framed_size, false);
+        m_fault_large_send[2] = doe_types[index];
+        memset(m_fault_large_send + sizeof(pci_doe_data_object_header_t), 0,
+               framed_size - sizeof(pci_doe_data_object_header_t));
+        memcpy(m_fault_large_send + sizeof(pci_doe_data_object_header_t),
+               send->large_message, send->large_message_size);
+        result = teeio_fault_apply(m_fault_large_send, framed_size, framed_size);
+        if (result.disposition == TEEIO_FAULT_DISPOSITION_PASS) {
+            continue;
+        }
+        if (result.disposition != TEEIO_FAULT_DISPOSITION_MUTATE ||
+            result.message_size != framed_size) {
+            teeio_fault_record_actual("chunked_fault_unsupported");
+            TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
+                         "Chunked request fault must be an in-place set/xor: %s\n",
+                         teeio_fault_audit_record()));
+            return false;
+        }
+        TEEIO_DEBUG((TEEIO_DEBUG_WARN, "Chunked request fault injection: %s\n",
+                     teeio_fault_audit_record()));
+        memcpy(send->large_message, result.message + sizeof(pci_doe_data_object_header_t),
+               send->large_message_size);
+        memcpy(message + header, send->large_message, payload);
+        return true;
+    }
+    return true;
+}
+
+bool teeio_spdm_parse_algorithms_response(const uint8_t *message, size_t size,
+                                          teeio_spdm_negotiated_algorithms_t *algorithms)
+{
+    const size_t fixed_size = 36;
+    size_t offset;
+    uint8_t index;
+
+    if (message == NULL || algorithms == NULL || size < fixed_size ||
+        message[1] != SPDM_ALGORITHMS) {
+        return false;
+    }
+    libspdm_zero_mem(algorithms, sizeof(*algorithms));
+    algorithms->version = message[0];
+    algorithms->base_asym_algo = libspdm_read_uint32(message + 12);
+    algorithms->base_hash_algo = libspdm_read_uint32(message + 16);
+    if (message[0] >= SPDM_MESSAGE_VERSION_14) {
+        algorithms->pqc_asym_algo = libspdm_read_uint32(message + 20);
+    }
+    offset = fixed_size + 4 * ((size_t)message[32] + message[33]);
+    for (index = 0; index < message[2] && offset + 4 <= size; index++) {
+        switch (message[offset]) {
+        case SPDM_NEGOTIATE_ALGORITHMS_STRUCT_TABLE_ALG_TYPE_DHE:
+            algorithms->dhe = libspdm_read_uint16(message + offset + 2);
+            break;
+        case SPDM_NEGOTIATE_ALGORITHMS_STRUCT_TABLE_ALG_TYPE_AEAD:
+            algorithms->aead = libspdm_read_uint16(message + offset + 2);
+            break;
+        case SPDM_NEGOTIATE_ALGORITHMS_STRUCT_TABLE_ALG_TYPE_KEM_ALG:
+            algorithms->kem = libspdm_read_uint16(message + offset + 2);
+            break;
+        default:
+            break;
+        }
+        offset += 2 + ((message[offset + 1] >> 4) & 0xf) + 4 * (message[offset + 1] & 0xf);
+    }
+    return true;
+}
+
+/* The campaign checks this line against the requested algorithm profile. */
+static void log_negotiated_algorithms(const uint8_t *frame, size_t frame_size)
+{
+    teeio_spdm_negotiated_algorithms_t algorithms;
+
+    if (frame_size < sizeof(pci_doe_data_object_header_t) ||
+        frame[2] != PCI_DOE_DATA_OBJECT_TYPE_SPDM ||
+        !teeio_spdm_parse_algorithms_response(frame + sizeof(pci_doe_data_object_header_t),
+                                              frame_size - sizeof(pci_doe_data_object_header_t),
+                                              &algorithms)) {
+        return;
+    }
+    TEEIO_DEBUG((TEEIO_DEBUG_INFO,
+                 "Negotiated algorithms: version=0x%02x base_asym=0x%08x base_hash=0x%08x "
+                 "pqc_asym=0x%08x dhe=0x%04x kem=0x%04x aead=0x%04x\n",
+                 algorithms.version, algorithms.base_asym_algo, algorithms.base_hash_algo,
+                 algorithms.pqc_asym_algo, algorithms.dhe, algorithms.kem, algorithms.aead));
+}
+
 libspdm_return_t teeio_fault_transport_encode_message(
     void *spdm_context, const uint32_t *session_id, bool is_app_message,
     bool is_request_message, size_t message_size, void *message,
     size_t *transport_message_size, void **transport_message)
 {
+    if (!is_app_message && session_id == NULL &&
+        !apply_chunked_request_fault(spdm_context, message, message_size)) {
+        return LIBSPDM_STATUS_SEND_FAIL;
+    }
     if (!is_app_message &&
         !apply_plain_send_fault(session_id != NULL, &message, &message_size,
                                 m_fault_plain_send)) {
@@ -217,6 +338,7 @@ void teeio_fault_transport_reset(void)
     m_fault_sending_deferred = false;
     memset(m_fault_deferred_send, 0, sizeof(m_fault_deferred_send));
     memset(m_fault_plain_send, 0, sizeof(m_fault_plain_send));
+    memset(m_fault_large_send, 0, sizeof(m_fault_large_send));
     memset(m_fault_duplicate_response, 0, sizeof(m_fault_duplicate_response));
     m_fault_draining_duplicate = false;
     m_fault_secured_message_context = NULL;
@@ -650,6 +772,7 @@ libspdm_return_t device_doe_receive_message(
         } else {
             append_pcap_packet_data(NULL, 0, (const void *)*response, *response_size);
             trace_oversized_chunk_doe(false, 0, *response, *response_size, 0);
+            log_negotiated_algorithms(*response, *response_size);
             status = LIBSPDM_STATUS_SUCCESS;
         }
     }

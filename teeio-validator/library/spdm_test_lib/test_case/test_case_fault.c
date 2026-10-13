@@ -69,6 +69,15 @@ static bool is_set_certificate_scenario(void)
          teeio_fault_driver() <= TEEIO_FAULT_DRIVER_CHUNK_LAST_WITHHELD;
 }
 
+/* An ML-DSA SET_CERTIFICATE exceeds a typical MaxSPDMmsgSize. In PQC the
+ * transfer-level drivers use the chunked ML-KEM KEY_EXCHANGE instead. */
+static bool is_key_exchange_chunk_target(void)
+{
+  return teeio_spdm_pqc_profile() &&
+         (teeio_fault_driver() == TEEIO_FAULT_DRIVER_CHUNK_OVERSIZED ||
+          teeio_fault_driver() == TEEIO_FAULT_DRIVER_CHUNK_LAST_WITHHELD);
+}
+
 /* The chunk drivers stay here; key-exchange and mutual-auth entry points are
  * deliberately separate. Do not fold their setup/run/teardown into this state. */
 
@@ -626,9 +635,10 @@ bool spdm_test_case_fault_setup(void *test_context)
       !teeio_spdm_apply_version_override(context->spdm_context)) {
     return false;
   }
-  if (teeio_spdm_pqc_profile() && teeio_fault_driver() != TEEIO_FAULT_DRIVER_CHUNK_ABANDON) {
+  if (teeio_spdm_pqc_profile() && teeio_fault_driver() != TEEIO_FAULT_DRIVER_CHUNK_ABANDON &&
+      !is_key_exchange_chunk_target()) {
     TEEIO_DEBUG((TEEIO_DEBUG_ERROR,
-      "SET_CERTIFICATE chunk drivers support only the classical profile (ML-DSA chain exceeds MaxSPDMmsgSize)\n"));
+      "SET_CERTIFICATE signature driver supports only the classical profile (ML-DSA chain exceeds MaxSPDMmsgSize)\n"));
     return false;
   }
 
@@ -712,6 +722,7 @@ bool spdm_test_case_fault_setup(void *test_context)
                            LIBSPDM_DATA_CAPABILITY_FLAGS,
                            &capabilities, sizeof(capabilities)) ||
       (teeio_fault_driver() != TEEIO_FAULT_DRIVER_CHUNK_ABANDON &&
+       !is_key_exchange_chunk_target() &&
        (capabilities & SPDM_GET_CAPABILITIES_RESPONSE_FLAGS_SET_CERT_CAP) == 0) ||
       (capabilities & SPDM_GET_CAPABILITIES_RESPONSE_FLAGS_CHUNK_CAP) == 0) {
     return false;
@@ -733,7 +744,8 @@ bool spdm_test_case_fault_setup(void *test_context)
   if (sizeof(context->test_scratch_buffer) < sizeof(*test_buffer)) {
     return false;
   }
-  status = libspdm_start_session(
+  /* The KEY_EXCHANGE target itself establishes the session in run. */
+  status = is_key_exchange_chunk_target() ? LIBSPDM_STATUS_SUCCESS : libspdm_start_session(
     context->spdm_context, false, NULL, 0,
     SPDM_KEY_EXCHANGE_REQUEST_NO_MEASUREMENT_SUMMARY_HASH, 0,
     SPDM_KEY_EXCHANGE_REQUEST_SESSION_POLICY_TERMINATION_POLICY_RUNTIME_UPDATE,
@@ -840,7 +852,7 @@ void spdm_test_case_fault_run(void *test_context)
 
   test_buffer = (void *)context->test_scratch_buffer;
   if (context->test_scratch_buffer_size != sizeof(*test_buffer) ||
-      test_buffer->session_id == 0) {
+      (test_buffer->session_id == 0 && !is_key_exchange_chunk_target())) {
     teeio_record_assertion_result(
       SPDM_TEST_CASE_FAULT, teeio_fault_driver(),
       TEEIO_FAULT_SET_CERTIFICATE_ASSERTION_ID,
@@ -863,6 +875,44 @@ void spdm_test_case_fault_run(void *test_context)
       TEEIO_FAULT_SET_CERTIFICATE_ASSERTION_ID,
       IDE_COMMON_TEST_CASE_ASSERTION_TYPE_TEST, TEEIO_TEST_RESULT_FAILED,
       "failed to read negotiated SPDM data");
+    return;
+  }
+
+  /* Setup already fetched the chain; a second fetch overflows message_b with ML-DSA chains. */
+  if (is_key_exchange_chunk_target()) {
+    test_buffer->data_transfer_size = data_transfer_size;
+    test_buffer->armed = true;
+    status = libspdm_start_session(
+      context->spdm_context, false, NULL, 0,
+      SPDM_KEY_EXCHANGE_REQUEST_NO_MEASUREMENT_SUMMARY_HASH, 0,
+      SPDM_KEY_EXCHANGE_REQUEST_SESSION_POLICY_TERMINATION_POLICY_RUNTIME_UPDATE,
+      &test_buffer->session_id, &test_buffer->heartbeat_period, NULL);
+    if (!LIBSPDM_STATUS_IS_ERROR(status)) {
+      libspdm_stop_session(context->spdm_context, test_buffer->session_id, 0);
+      test_buffer->session_id = 0;
+    }
+    if (test_buffer->oversized) {
+      chunk_assert(3, test_buffer->first_early_invalid_request &&
+                     !test_buffer->invalid && test_buffer->send_count == 1 &&
+                     test_buffer->ack_count <= 1,
+        "FIRST response to oversized KEY_EXCHANGE CHUNK_SEND: InvalidRequest 0x01, bare or in EARLY_ERROR_DETECTED ACK");
+    } else {
+      chunk_assert(3, test_buffer->selected && test_buffer->last_send_final &&
+                     test_buffer->ack_count > 0 && !test_buffer->invalid,
+        "LAST_CHUNK withheld only after an acknowledged partial KEY_EXCHANGE transfer");
+    }
+    teeio_record_assertion_result(
+      SPDM_TEST_CASE_FAULT, teeio_fault_driver(),
+      TEEIO_FAULT_SET_CERTIFICATE_ASSERTION_ID,
+      IDE_COMMON_TEST_CASE_ASSERTION_TYPE_TEST,
+      test_buffer->selected && !test_buffer->invalid &&
+      teeio_fault_fire_count() == 1 && LIBSPDM_STATUS_IS_ERROR(status) &&
+      (test_buffer->oversized ? test_buffer->first_early_invalid_request :
+       test_buffer->ack_count > 0) ?
+        TEEIO_TEST_RESULT_PASS : TEEIO_TEST_RESULT_FAILED,
+      "corrupted chunked KEY_EXCHANGE status - 0x%x", (uint32_t)status);
+    teeio_fault_record_actual("chunk_driver_no_expected_response");
+    chunk_recover(context);
     return;
   }
 

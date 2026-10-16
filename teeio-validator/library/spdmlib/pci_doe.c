@@ -437,7 +437,7 @@ libspdm_return_t device_doe_send_message(
 
     TEEIO_ASSERT((request_size & 3) == 0);
     data_object_count = (uint32_t)(request_size / sizeof(uint32_t));
-    data_object_buffer = (uint32_t *)(uintptr_t)request; // cast discards ‘const’ qualifier from pointer target type
+    data_object_buffer = (const uint32_t *)request;
 
     TEEIO_DOE_DEBUG ((TEEIO_DEBUG_INFO, "[device_doe_send_message] Start ... \n"));
 

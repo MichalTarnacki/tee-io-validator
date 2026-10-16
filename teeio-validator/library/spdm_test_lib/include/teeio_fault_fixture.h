@@ -10,8 +10,11 @@
 #include "teeio_fault_injection.h"
 
 /* Storage is appended to the owning libspdm context allocation. The root
- * setter BORROWS it: never free it while that context is alive. */
+ * setter BORROWS it: never free it while that context is alive. It holds the
+ * ECDSA root and the 7496-byte ML-DSA-87 root back to back. */
 #define TEEIO_FAULT_ROOT_CAPACITY 4096
+#define TEEIO_FAULT_PQC_ROOT_CAPACITY 8192
+#define TEEIO_FAULT_ROOTS_CAPACITY (TEEIO_FAULT_ROOT_CAPACITY + TEEIO_FAULT_PQC_ROOT_CAPACITY)
 
 static inline bool teeio_fault_fixture_root_required(bool is_fault_group)
 {
@@ -61,12 +64,15 @@ static inline bool teeio_fault_fixture_path(const char *name, char **path)
 /* The upstream PEM signer reads cwd-relative files. Require that BOTH sample
  * reads resolve to the explicitly selected fixtures; never chdir or fall back
  * to an unrelated key in the artifact directory. */
-static inline bool teeio_fault_fixture_sample_paths(void)
+static inline bool teeio_fault_fixture_sample_paths(bool pqc)
 {
-  const char *names[] = {"ecp384/bundle_requester.certchain.der",
-                         "ecp384/end_requester.key"};
+  const char *classical[] = {"ecp384/bundle_requester.certchain.der",
+                             "ecp384/end_requester.key"};
+  const char *mldsa[] = {"mldsa87/bundle_requester.certchain.der",
+                         "mldsa87/end_requester.key"};
+  const char **names = pqc ? mldsa : classical;
   size_t index;
-  for (index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+  for (index = 0; index < 2; index++) {
     char *expected = NULL;
     char *actual = realpath(names[index], NULL);
     bool valid = teeio_fault_fixture_path(names[index], &expected) &&
@@ -105,14 +111,15 @@ static inline bool teeio_fault_fixture_is_single_der(const uint8_t *der, size_t 
   return length == size - header;
 }
 
-static inline bool teeio_fault_fixture_install_root(void *spdm, void *storage)
+static inline bool teeio_fault_fixture_install_one_root(void *spdm, const char *name,
+                                                       uint8_t *storage, size_t capacity)
 {
   char *path;
   FILE *stream;
   size_t size;
   bool valid;
   libspdm_data_parameter_t parameter = {0};
-  if (!teeio_fault_fixture_path("responder_root.der", &path)) {
+  if (!teeio_fault_fixture_path(name, &path)) {
     return false;
   }
   stream = fopen(path, "rb");
@@ -120,10 +127,10 @@ static inline bool teeio_fault_fixture_install_root(void *spdm, void *storage)
   if (stream == NULL) {
     return false;
   }
-  size = fread(storage, 1, TEEIO_FAULT_ROOT_CAPACITY, stream);
+  size = fread(storage, 1, capacity, stream);
   /* A full buffer does not set EOF; probe one byte to reject larger files. */
   valid = !ferror(stream) &&
-          (size < TEEIO_FAULT_ROOT_CAPACITY ? feof(stream) :
+          (size < capacity ? feof(stream) :
            (fgetc(stream) == EOF && !ferror(stream))) &&
           teeio_fault_fixture_is_single_der(storage, size);
   fclose(stream);
@@ -133,6 +140,16 @@ static inline bool teeio_fault_fixture_install_root(void *spdm, void *storage)
   parameter.location = LIBSPDM_DATA_LOCATION_LOCAL;
   return libspdm_set_data(spdm, LIBSPDM_DATA_PEER_PUBLIC_ROOT_CERT,
                            &parameter, storage, size) == LIBSPDM_STATUS_SUCCESS;
+}
+
+/* The responder signs with its ECDSA or its ML-DSA-87 chain, by negotiation. */
+static inline bool teeio_fault_fixture_install_root(void *spdm, void *storage)
+{
+  return teeio_fault_fixture_install_one_root(spdm, "responder_root.der",
+                                              storage, TEEIO_FAULT_ROOT_CAPACITY) &&
+         teeio_fault_fixture_install_one_root(spdm, "responder_root_mldsa87.der",
+                                              (uint8_t *)storage + TEEIO_FAULT_ROOT_CAPACITY,
+                                              TEEIO_FAULT_PQC_ROOT_CAPACITY);
 }
 
 #endif

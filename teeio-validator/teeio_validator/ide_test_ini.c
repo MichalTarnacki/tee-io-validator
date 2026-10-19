@@ -2318,6 +2318,19 @@ bool ParseMainSection(void *context, IDE_TEST_CONFIG *test_config)
     }
   }
 
+  test_config->main_config.algorithm_profile = TEEIO_SPDM_ALGORITHM_PROFILE_CLASSICAL;
+  sprintf(entry_name, "%s", MAIN_SECTION_ALGORITHM_PROFILE);
+  if (GetStringFromDataFile(context, (uint8_t *)section_name, (uint8_t *)entry_name, &entry_value))
+  {
+    if (strcmp((const char *)entry_value, "pqc") == 0) {
+      test_config->main_config.algorithm_profile = TEEIO_SPDM_ALGORITHM_PROFILE_PQC;
+    } else if (strcmp((const char *)entry_value, "classical") != 0) {
+      TEEIO_DEBUG((TEEIO_DEBUG_ERROR, "[%s] %s shall be classical or pqc. %s\n",
+                   section_name, entry_name, entry_value));
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -2661,6 +2674,9 @@ void dump_test_config(IDE_TEST_CONFIG *test_config)
     TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  spdm_version=%u.%u\n",
                  main_config->spdm_version >> 4, main_config->spdm_version & 0x0f));
   }
+  TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "  algorithm_profile=%s\n",
+               main_config->algorithm_profile == TEEIO_SPDM_ALGORITHM_PROFILE_PQC ?
+               "pqc" : "classical"));
   TEEIO_DEBUG((TEEIO_DEBUG_VERBOSE, "\n"));
 
   IDE_TEST_FAULT_CONFIG *fault_config = &test_config->fault_injection;

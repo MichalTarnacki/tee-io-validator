@@ -125,7 +125,7 @@ void *spdm_init_client(void)
   TEEIO_DEBUG((TEEIO_DEBUG_INFO, "spdm_init_client\n"));
   teeio_fault_transport_reset();
 
-  spdm_context = (void *)malloc(libspdm_get_context_size() + TEEIO_FAULT_ROOT_CAPACITY);
+  spdm_context = (void *)malloc(libspdm_get_context_size() + TEEIO_FAULT_ROOTS_CAPACITY);
   if (spdm_context == NULL) {
     return NULL;
   }
@@ -168,7 +168,8 @@ void *spdm_init_client(void)
   }
   libspdm_set_scratch_buffer (spdm_context, scratch_buffer, scratch_buffer_size);
 
-  if (!teeio_spdm_apply_version_override(spdm_context)) {
+  if (!teeio_spdm_apply_version_override(spdm_context) ||
+      !teeio_spdm_apply_algorithm_profile(spdm_context)) {
     free(scratch_buffer);
     free(spdm_context);
     return NULL;
